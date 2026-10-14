@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "credence-agent"
+version = "1.0.0"
+description = "CREDENCE: Co-Evolving Memory, Tools, and Curation for Long-Horizon Agents via Counterfactual Credit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.6,<3", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+models = ["transformers==4.57.3", "peft==0.17.1", "accelerate>=1.5,<2", "lm-format-enforcer==0.11.3"]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+credence = "credence.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["credence*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

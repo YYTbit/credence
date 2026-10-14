@@ -1,0 +1,22 @@
+{
+  "scienceworld": {
+    "factory": "credence.benchmarks:ScienceWorldEnvironment",
+    "kwargs": {"step_limit": 100}
+  },
+  "webshop": {
+    "factory": "credence.benchmarks:WebShopEnvironment",
+    "kwargs": {"sdk_path": "external/WebShop", "environment": {"observation_mode": "text", "human_goals": true}}
+  },
+  "api_bank": {
+    "factory": "credence.benchmarks:APIBankEnvironment",
+    "kwargs": {"sdk_path": "external/API-Bank/api-bank"}
+  },
+  "toolbench": {
+    "factory": "credence.benchmarks:ToolBenchEnvironment",
+    "kwargs": {"sdk_path": "external/ToolBench", "tool_root_dir": "data/toolenv/tools", "evaluate_times": 4}
+  },
+  "appworld": {
+    "factory": "credence.benchmarks:AppWorldEnvironment",
+    "kwargs": {}
+  }
+}

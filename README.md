@@ -18,11 +18,14 @@ pip install -e ".[models,test]"
 
 ## Usage
 
-Prepare recorded head examples and official benchmark interfaces as described in [input preparation](docs/execution.md).
+Collect the paper's warm-start rollouts and configure official benchmark interfaces as described in [input preparation](docs/execution.md).
 
 ```bash
+python -m credence collect-warm-start --config configs/qwen3_8b.yaml \
+  --tasks data/tasks.jsonl --environments configs/environments.json \
+  --output data/warm_start
 python -m credence sft --config configs/qwen3_8b.yaml \
-  --examples data/head_examples.jsonl --output checkpoints/warm_start
+  --examples data/warm_start/head_examples.jsonl --output checkpoints/warm_start
 python -m credence train --config configs/qwen3_8b.yaml \
   --tasks data/tasks.jsonl --environments configs/environments.json \
   --warm-start checkpoints/warm_start --output results/credence

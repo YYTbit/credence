@@ -42,9 +42,19 @@ Native wrappers retain environment state in separate processes and expose `bench
 
 `WorkspaceEnvironment` executes local software fixtures with `files` and `expected` fields.
 
-## Warm-start records
+## Warm-start collection
 
-Use recorded completions for all three heads. Each JSON line has `head`, `prompt`, and `response`. Heads are `writer`, `builder`, and `curator`. Responses follow the paper templates in the executable prompt module. The warm start establishes the reference adapters.
+Warm-start collection runs the base model on the four training distributions in round-robin order. It excludes non-training records, records each complete scored trajectory, and generates writer, builder, and curator targets from the recorded trajectory and touched assets. Target outputs pass the same format, Python compilation, and curation-operation checks used at runtime. A target that fails validation is recorded in the manifest count and omitted from supervised training.
+
+```bash
+python -m credence collect-warm-start --config configs/qwen3_8b.yaml \
+  --tasks data/tasks.jsonl --environments configs/environments.json \
+  --output data/warm_start
+python -m credence sft --config configs/qwen3_8b.yaml \
+  --examples data/warm_start/head_examples.jsonl --output checkpoints/warm_start
+```
+
+The default collection contains 1,000 trajectories, evenly interleaved across ScienceWorld, WebShop, API-Bank, and ToolBench. `--trajectories` sets a smaller collection size for preparation checks. The output contains `trajectories.jsonl`, `head_examples.jsonl`, and `manifest.json`, which records task identifiers, seeds, target counts, model source and revision when exposed by the model configuration, split filtering, and file hashes. The base model generates both the trajectories and head targets with its adapters disabled. The paper specifies the base-model source and training split but does not state a decoding temperature; collection follows the runtime's greedy rollout policy and records that choice.
 
 ## Execution
 
@@ -62,3 +72,10 @@ python -m credence run --checkpoint results/credence/checkpoint \
 ```
 
 The output directory contains execution records and resumable checkpoints, including pending candidate groups. Every fifth stream position supplies calibration data and is excluded from policy and predictor updates. Evaluation clones the trained benchmark store for each task. Unavailable grader results are recorded without numeric scores. Model access credentials are supplied through the environment.
+
+Summaries and an SVG score plot are generated from scored episode records only.
+
+```bash
+python -m credence artifacts --episodes results/evaluation/episodes.jsonl \
+  --output results/evaluation/artifacts
+```

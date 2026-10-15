@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -14,12 +15,22 @@ def parser():
     validate.add_argument("--config", required=True)
     validate.add_argument("--tasks", required=True)
     validate.add_argument("--environments", required=True)
+    artifacts = commands.add_parser("artifacts", help="Summarize recorded episodes and plot observed scores")
+    artifacts.add_argument("--episodes", required=True)
+    artifacts.add_argument("--output", required=True)
     sft = commands.add_parser("sft", help="Train the three warm-start adapters from recorded head examples")
     sft.add_argument("--config", required=True)
     sft.add_argument("--examples", required=True)
     sft.add_argument("--output", required=True)
     sft.add_argument("--epochs", type=int, default=1)
     sft.add_argument("--learning-rate", type=float, default=5e-5)
+    collect = commands.add_parser("collect-warm-start", help="Collect base-model rollouts and validated head targets")
+    collect.add_argument("--config", required=True)
+    collect.add_argument("--tasks", required=True)
+    collect.add_argument("--environments", required=True)
+    collect.add_argument("--output", required=True)
+    collect.add_argument("--trajectories", type=int, default=1000)
+    collect.add_argument("--seed", type=int, default=None)
     train = commands.add_parser("train", help="Train CREDENCE with matched continuations and delayed rewards")
     train.add_argument("--config", required=True)
     train.add_argument("--tasks", required=True)
@@ -36,13 +47,17 @@ def parser():
     run.add_argument("--environments", required=True)
     run.add_argument("--output", required=True)
     run.add_argument("--seed", type=int, default=149)
-    for command in (sft, train, run):
+    for command in (sft, collect, train, run):
         command.add_argument("--device", default=None)
     return root
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == "artifacts":
+        from .artifacts import summarize_episodes
+        print(json.dumps(summarize_episodes(args.episodes, args.output), allow_nan=False))
+        return
     config_path = Path(args.checkpoint) / "config.yaml" if args.command == "run" else args.config
     config = Config.load(config_path)
     if getattr(args, "device", None):
@@ -59,11 +74,27 @@ def main(argv=None):
         print(json.dumps({"tasks": len(tasks), "benchmarks": sorted({task['benchmark'] for task in tasks}),
                           "summary_dimension": config.summary_dim}))
         return
+    warm_tasks = warm_environments = None
+    if args.command == "collect-warm-start":
+        from .warm_start import _round_robin
+        warm_tasks = load_tasks(args.tasks)
+        _round_robin(warm_tasks, args.trajectories,
+                     config.seed if args.seed is None else args.seed)
+        warm_environments = load_environments(args.environments)
     import torch
     from .models import LanguageModels
     from .training import Trainer, supervised_warm_start
-    torch.manual_seed(config.seed)
+    torch.manual_seed(args.seed if args.command == "collect-warm-start" and args.seed is not None
+                      else config.seed)
     models = LanguageModels.load(config)
+    if args.command == "collect-warm-start":
+        from .warm_start import collect_warm_start
+        manifest = collect_warm_start(models, warm_environments, config, warm_tasks, args.output,
+                                      args.trajectories, args.seed,
+                                      input_hashes={"tasks": hashlib.sha256(Path(args.tasks).read_bytes()).hexdigest(),
+                                                    "environments": hashlib.sha256(Path(args.environments).read_bytes()).hexdigest()})
+        print(json.dumps(manifest, ensure_ascii=False))
+        return
     if args.command == "sft":
         if args.epochs < 1 or args.learning_rate <= 0:
             raise ValueError("Warm-start epochs and learning rate require positive values")

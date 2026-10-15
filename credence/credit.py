@@ -17,6 +17,7 @@ class CreditStats:
         self.count += 1
         delta = value - self.mean
         self.mean += delta / self.count
+        # Welford's update maintains sample variance without storing prior credit values.
         self.variance = (max(0, old_count - 1) * self.variance
                          + delta * (value - self.mean)) / max(1, old_count)
         self.variance = max(0.0, self.variance)

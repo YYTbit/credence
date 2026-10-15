@@ -198,6 +198,7 @@ class Trainer:
     def update(self, records, warmup=False):
         if not records:
             return
+        # Policy gradients use candidate groups only after their delayed rewards mature.
         ready = [] if warmup else self.buffer.release(self.head_updates, self.config.credit_horizon, self.config.token_cost)
         self.optimizer.zero_grad(set_to_none=True)
         policy_value = 0.0

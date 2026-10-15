@@ -44,6 +44,7 @@ class CandidateGroup:
                 if elapsed >= horizon:
                     if len(candidate.scores) != len(self.reference_scores):
                         raise ValueError("Candidate and reference continuations differ in length")
+                    # Matched reference continuations cancel task difficulty when scoring curator choices.
                     candidate.reward = sum(a - b for a, b in zip(candidate.scores, self.reference_scores)) / max(1, len(candidate.scores))
             elif not candidate.valid or candidate.asset_id is None:
                 candidate.reward = -cost * candidate.payload_tokens / 1000

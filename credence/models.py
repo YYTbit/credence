@@ -65,6 +65,7 @@ class LanguageModels:
                 parameter.requires_grad_(False)
 
     def refresh_references(self):
+        # Snapshot each head so its KL reference stays fixed while that policy trains.
         from peft import get_peft_model_state_dict, set_peft_model_state_dict
         for head in self.heads:
             reference = head + "_ref"
@@ -137,6 +138,7 @@ class LanguageModels:
             self.select(head)
         with context, torch.no_grad():
             inputs = torch.tensor([ids], device=self.device)
+            # Reuse the KV cache and feed only the newest token after the prompt pass.
             cache = None
             for _ in range(max_tokens):
                 result = self.model(input_ids=inputs, past_key_values=cache, use_cache=True)
@@ -161,6 +163,7 @@ class LanguageModels:
         with nullcontext() if grad else torch.no_grad():
             result = self.model(input_ids=ids, use_cache=False)
             start = len(sample.prompt_ids) - 1
+            # Apply the generation-time grammar at each prefix when scoring output tokens.
             values = []
             for i, token in enumerate(sample.output_ids):
                 prefix = ids[0, :len(sample.prompt_ids) + i]

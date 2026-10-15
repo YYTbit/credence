@@ -166,6 +166,7 @@ class Runtime:
     def credit(self, episode, store):
         values = {}
         for aid in episode.assembled:
+            # Removing one asset from the summary estimates its marginal contribution to this outcome.
             summary = self.summary(episode.store, episode.subtasks, exclude=aid)
             value = episode.score - self.prediction(summary)
             if aid in store.assets:

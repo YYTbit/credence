@@ -63,9 +63,6 @@ python -m credence train --config configs/qwen3_8b.yaml \
   --warm-start checkpoints/warm_start --output results/credence
 ```
 
-Use `--resume results/credence/checkpoint` to continue a saved run. See the
-[training guide](docs/execution.md#execution) for the complete resume command.
-
 ## Evaluation
 
 Evaluate the trained checkpoint on the benchmark tasks:

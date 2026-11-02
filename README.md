@@ -18,15 +18,13 @@ interactive science, tool use, and API programming. Across Qwen3-8B and
 Llama-3.1-8B-Instruct, it improves average performance by 7.5 and 7.1 points
 over the strongest baseline. Ablations support the complementary roles of joint
 training and removal-based credit, while calibration shows 99.2% sign agreement
-on acted decisions. Code is available at
-<https://anonymous.4open.science/r/credence-7446/>.
+on acted decisions.
 
 ![Comparison of store evolution strategies](assets/overview.png)
 
 ## Installation
 
-Use Python 3.10 or later and a PyTorch installation appropriate for the
-execution hardware.
+Use Python 3.10 or later and install PyTorch for your system.
 
 ```bash
 python -m venv .venv
@@ -36,36 +34,16 @@ python -m pip install -e '.[models,test]' \
 export HF_ENDPOINT=https://hf-mirror.com
 ```
 
-## Data and environments
+## Data preparation
 
-Install the released environments and prepare task records using their native
-identifiers, splits, and graders.
+Install the benchmark environments and prepare `data/tasks.jsonl` following the
+[data guide](docs/execution.md). Set the environment paths in
+[configs/environments.json](configs/environments.json) and choose a model profile
+from [configs/](configs).
 
-| Environment | Role |
-| --- | --- |
-| API-Bank | Training and tool-calling evaluation |
-| WebShop | Training and shopping evaluation |
-| ScienceWorld | Training and interactive-science evaluation |
-| ToolBench | Training and tool-use evaluation |
-| AppWorld | Test-Normal transfer evaluation |
+## Training
 
-The [execution guide](docs/execution.md) specifies JSONL task fields and native
-SDK options. [configs/environments.json](configs/environments.json) selects the
-five supplied wrappers. Set SDK locations and task parameters before running
-collection.
-
-Validate task and environment inputs without loading the backbone.
-
-```bash
-python -m credence validate --config configs/qwen3_8b.yaml \
-  --tasks data/tasks.jsonl --environments configs/environments.json
-```
-
-## Warm start
-
-Collect base-model rollouts from the four training distributions. The default
-collection contains 1,000 trajectories and produces validated writer, builder,
-and curator targets.
+Collect warm-start examples and train the initial policy adapters:
 
 ```bash
 python -m credence collect-warm-start --config configs/qwen3_8b.yaml \
@@ -77,13 +55,7 @@ python -m credence sft --config configs/qwen3_8b.yaml \
   --output checkpoints/warm_start
 ```
 
-Collection records task identities, seeds, model provenance, and target counts.
-Supervised training initializes the three policy adapters from these examples.
-
-## Joint training
-
-Train the memory writer, tool builder, curator, encoder, and outcome model with
-matched task streams and delayed credit.
+Start joint training from this checkpoint:
 
 ```bash
 python -m credence train --config configs/qwen3_8b.yaml \
@@ -91,61 +63,24 @@ python -m credence train --config configs/qwen3_8b.yaml \
   --warm-start checkpoints/warm_start --output results/credence
 ```
 
-Every fifth stream position supplies calibration observations and is excluded
-from policy and predictor updates. Pending candidate groups retain behavior
-probabilities and their original policy versions until rewards mature.
-
-Resume the saved optimizer, stores, candidate groups, calibration, and stream
-positions.
-
-```bash
-python -m credence train --config configs/qwen3_8b.yaml \
-  --tasks data/tasks.jsonl --environments configs/environments.json \
-  --resume results/credence/checkpoint --output results/continued
-```
+Use `--resume results/credence/checkpoint` to continue a saved run. See the
+[training guide](docs/execution.md#execution) for the complete resume command.
 
 ## Evaluation
 
-Run native evaluation tasks using the trained checkpoint and benchmark store.
+Evaluate the trained checkpoint on the benchmark tasks:
 
 ```bash
 python -m credence run --checkpoint results/credence/checkpoint \
   --tasks data/evaluation.jsonl --environments configs/environments.json \
-  --output results/evaluation --seed 149
+  --output results/evaluation
 ```
 
-Each evaluation task receives a cloned store. The supplied wrappers retain
-official task scores; unavailable grader results are recorded separately.
-`python -m credence artifacts --help` describes aggregation of completed episode
-records.
-
-## Configuration
-
-Choose [Qwen3-8B](configs/qwen3_8b.yaml) or
-[Llama-3.1-8B-Instruct](configs/llama3_1_8b.yaml) and set the model source,
-device, and seed for the run.
-
-| Setting | Value |
-| --- | --- |
-| Policy adapters | LoRA rank 16, scale 32 |
-| Candidate group size | 8 |
-| Creator-credit horizon | 20 episodes |
-| Maximum policy lag | 32 updates |
-| Selected context assets | 24 |
-| Store capacity | 1,000 assets |
-| Episode token budget | 28,000 |
-
-The [execution guide](docs/execution.md) also specifies warm-start provenance,
-calibration positions, and native task parameters.
-
-## Software checks
+## Tests
 
 ```bash
-CUDA_VISIBLE_DEVICES='' python -m pytest -q
+python -m pytest -q
 ```
-
-CPU checks cover delayed credit, store operations, masked policy likelihoods,
-joint gradients, and checkpoint continuation.
 
 ## License
 

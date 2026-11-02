@@ -40,7 +40,7 @@ Native wrappers retain environment state in separate processes and expose `bench
 | `step` | `action` | `observation` |
 | `grade` | `answer` | `score` |
 
-`WorkspaceEnvironment` executes local software fixtures with `files` and `expected` fields.
+For local examples, `WorkspaceEnvironment` uses `files` and `expected` fields.
 
 ## Warm-start collection
 

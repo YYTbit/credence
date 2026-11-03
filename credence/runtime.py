@@ -199,7 +199,7 @@ class Runtime:
                 current = self.selection(store, subtasks)
 
     def partition(self, keywords):
-        return keyword_partition(self.models.encode(keywords))
+        return keyword_partition(self.models.encode(keywords), self.config.seed)
 
     def split_memory(self, asset, groups):
         units = [unit.strip() for unit in re.split(r"(?<=[.!?;])\s+|\n+", asset.text) if unit.strip()]

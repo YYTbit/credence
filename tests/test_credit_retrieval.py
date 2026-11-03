@@ -7,7 +7,7 @@ import torch
 from credence.config import Config
 from credence.credit import Calibrator, CreditStats, residual_bounds
 from credence.models import OutcomeModel
-from credence.retrieval import coverage, greedy_select, pool_summary
+from credence.retrieval import coverage, greedy_select, keyword_partition, pool_summary
 from credence.store import Asset
 
 
@@ -47,6 +47,20 @@ def test_empty_and_nonpositive_context():
     assert greedy_select(tasks, torch.empty(0, 2), 3)[0] == []
     assert greedy_select(tasks, -torch.eye(2), 3)[0] == []
     assert greedy_select(tasks, torch.eye(2), 0)[0] == []
+
+
+def test_keyword_partition_recovers_two_semantic_groups():
+    embeddings = torch.tensor([[1., 0], [1., 0.1], [-1., 0], [-1., -0.1]])
+    groups = keyword_partition(embeddings, seed=41)
+    assert {frozenset(group) for group in groups} == {frozenset([0, 1]), frozenset([2, 3])}
+    assert keyword_partition(embeddings, seed=41) == groups
+
+
+@pytest.mark.parametrize("embeddings", [torch.ones(3, 2), torch.ones(1, 2),
+                                       torch.tensor([[float("nan"), 0], [1., 0]])])
+def test_keyword_partition_declines_inseparable_or_invalid_inputs(embeddings):
+    with pytest.raises(ValueError):
+        keyword_partition(embeddings)
 
 
 def test_summary_preserves_task_identity_and_removal():

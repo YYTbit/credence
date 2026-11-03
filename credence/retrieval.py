@@ -53,19 +53,16 @@ def pool_summary(subtasks, embeddings, assets, budget):
     return torch.cat((mean_asset, mean_task, stats, values))
 
 
-def keyword_partition(embeddings):
-    if len(embeddings) < 2:
-        raise ValueError("Memory splitting requires at least two keywords")
-    points = F.normalize(embeddings.detach(), dim=-1)
-    second = int(((points - points[0]) ** 2).sum(dim=1).argmax())
-    centers = torch.stack((points[0], points[second]))
-    labels = torch.zeros(len(points), dtype=torch.long, device=points.device)
-    for _ in range(30):
-        current = torch.cdist(points, centers).argmin(dim=1)
-        if current.min() == current.max():
-            current[len(points) // 2:] = 1
-        updated = torch.stack([points[current == k].mean(dim=0) for k in range(2)])
-        if torch.equal(current, labels) and torch.allclose(updated, centers):
-            break
-        labels, centers = current, updated
+def keyword_partition(embeddings, seed=0):
+    from sklearn.cluster import KMeans
+
+    if embeddings.ndim != 2 or len(embeddings) < 2 or not embeddings.shape[1] or not torch.isfinite(embeddings).all():
+        raise ValueError("Memory splitting requires finite keyword embeddings")
+    points = F.normalize(embeddings.detach().float(), dim=-1).cpu()
+    if len(torch.unique(points, dim=0)) < 2:
+        raise ValueError("Memory splitting requires distinct keyword embeddings")
+    # Algorithm 5 specifies two clusters; the remaining settings use sklearn defaults.
+    labels = KMeans(n_clusters=2, random_state=seed).fit_predict(points.numpy())
+    if len(set(labels)) != 2:
+        raise ValueError("Keyword clustering did not produce two nonempty groups")
     return [[i for i in range(len(points)) if int(labels[i]) == k] for k in range(2)]

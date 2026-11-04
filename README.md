@@ -29,7 +29,7 @@ Use Python 3.10 or later and install PyTorch for your system.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[models,test]' \
+python -m pip install -e '.[models]' \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 export HF_ENDPOINT=https://hf-mirror.com
 ```
@@ -71,12 +71,6 @@ Evaluate the trained checkpoint on the benchmark tasks:
 python -m credence run --checkpoint results/credence/checkpoint \
   --tasks data/evaluation.jsonl --environments configs/environments.json \
   --output results/evaluation
-```
-
-## Tests
-
-```bash
-python -m pytest -q
 ```
 
 ## License

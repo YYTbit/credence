@@ -12,13 +12,9 @@ dependencies = ["torch>=2.6,<3", "PyYAML>=6,<7", "scikit-learn==1.7.2"]
 
 [project.optional-dependencies]
 models = ["transformers==4.57.3", "peft==0.17.1", "accelerate>=1.5,<2", "lm-format-enforcer==0.11.3"]
-test = ["pytest>=8,<9"]
 
 [project.scripts]
 credence = "credence.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["credence*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

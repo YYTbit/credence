@@ -55,7 +55,7 @@ python -m credence sft --config configs/qwen3_8b.yaml \
   --output checkpoints/warm_start
 ```
 
-Start joint training from this checkpoint:
+Use the policy adapters trained above to initialize joint training:
 
 ```bash
 python -m credence train --config configs/qwen3_8b.yaml \

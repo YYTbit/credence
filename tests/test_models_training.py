@@ -26,6 +26,25 @@ def test_behavior_probabilities_match_replayed_sampling_policy(language_models):
     assert torch.allclose(sample.behavior_logprobs, replay, atol=1e-5)
 
 
+@pytest.mark.parametrize("multiple", [False, True])
+def test_generation_respects_native_end_tokens(language_models, monkeypatch, multiple):
+    native_end = language_models.tokenizer.convert_tokens_to_ids("<unk>")
+    tokenizer_end = language_models.tokenizer.eos_token_id
+    assert native_end != tokenizer_end
+    language_models.model.generation_config.eos_token_id = [tokenizer_end, native_end] if multiple else native_end
+    forward = language_models.model.forward
+
+    def emit_end(*args, **kwargs):
+        result = forward(*args, **kwargs)
+        result.logits.fill_(-10000)
+        result.logits[..., native_end] = 10000
+        return result
+
+    monkeypatch.setattr(language_models.model, "forward", emit_end)
+    sample = language_models.generate("agent", "Finish the response", 4, sample=False)
+    assert sample.output_ids == [native_end]
+
+
 def test_masked_behavior_probabilities_match_replayed_policy(language_models):
     schema = {"type": "object", "properties": {"choice": {"enum": ["a", "b"]}},
               "required": ["choice"], "additionalProperties": False}

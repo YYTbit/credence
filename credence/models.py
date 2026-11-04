@@ -127,10 +127,13 @@ class LanguageModels:
         return mask
 
     def generate(self, head, prompt, max_tokens, seed=0, schema=None, sample=True):
+        from transformers.generation.stopping_criteria import EosTokenCriteria
         from .groups import Sample
         ids = self.prompt_ids(prompt)
         generator = torch.Generator(device=self.device).manual_seed(seed)
         grammar = self._grammar(schema)
+        eos = getattr(self.model.generation_config, "eos_token_id", None)
+        stopping = EosTokenCriteria(self.tokenizer.eos_token_id if eos is None else eos)
         self.model.eval()
         output, probabilities = [], []
         context = self.model.disable_adapter() if head == "agent" else nullcontext()
@@ -150,7 +153,7 @@ class LanguageModels:
                 probabilities.append(logprobs[token].cpu())
                 cache = result.past_key_values
                 inputs = torch.tensor([[token]], device=self.device)
-                if token == self.tokenizer.eos_token_id:
+                if stopping(inputs, None).item():
                     break
         text = self.tokenizer.decode(output, skip_special_tokens=True)
         return Sample(prompt, ids, output, text, torch.stack(probabilities), schema)

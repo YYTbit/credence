@@ -36,13 +36,23 @@ To learn asset creation and maintenance together, CREDENCE jointly trains three 
 
 ## Results
 
+### Main Results
+
 **Table 1.** Main results under official evaluation settings, as mean and standard deviation over three training seeds on a 0–100 scale. AppWorld measures transfer. Avg. is the unweighted five-benchmark mean. Bold marks the best result per backbone.
 
 ![Main results from Table 1](assets/main_results.png)
 
-**Joint training with asset credit improves task performance.** Table 1 shows gains on all five benchmarks. On Qwen3-8B, CREDENCE improves the average from MemPO’s 55.6 to 63.1. Gains over each column’s strongest baseline are 8.4 points on API-Bank, 8.0 on AppWorld, 2.1 on WebShop, 6.0 on ToolBench, and 2.7 on ScienceWorld. The pattern supports learning reusable asset utility across interaction environments.
+### Ablation Study
 
-**The gains extend to a second backbone and transfer tasks.** On Llama-3.1-8B-Instruct, the average increases from 53.0 to 60.1, improving every benchmark. AppWorld rises from 20.6 to 28.0, supporting transfer of learned asset operations to an environment excluded from training.
+**Table 2.** Qwen3-8B ablations, reported as mean and standard deviation over three seeds. Trained variants share the full method’s protocol, update budget, and data order. The w/o train control uses the warm start, and Oracle uses measured removal effects. Groups indicate the intervention type.
+
+![Component ablations from Table 2](assets/ablations.png)
+
+### Analysis
+
+![Analysis from Figure 2](assets/analysis.png)
+
+**Figure 2.** Credit calibration. (a) Sign agreement and decision counts. (b) Accuracy and abstention at three quantiles. (c) Identification latency and counts. (d) Paired removal estimates and measured effects at 160 positions. The dashed line marks equality.
 
 ## Getting Started
 
@@ -60,10 +70,9 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ### Data Preparation
 
-Install the benchmark environments and prepare the training and evaluation tasks
-following the [data guide](docs/execution.md). Set the environment paths in
-[configs/environments.json](configs/environments.json) and choose a model profile
-from [configs/](configs).
+Prepare `data/tasks.jsonl` for training and `data/evaluation.jsonl` for evaluation.
+Set the benchmark environment paths in `configs/environments.json`.
+The [task format](docs/execution.md) specifies the input fields.
 
 ### Training and Evaluation
 

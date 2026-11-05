@@ -38,21 +38,9 @@ To learn asset creation and maintenance together, CREDENCE jointly trains three 
 
 ![Main results from Table 1](assets/main_results.png)
 
-### Ablation Study
+**Joint training with asset credit improves task performance.** Table 1 shows gains on all five benchmarks. On Qwen3-8B, CREDENCE improves the average from MemPO’s 55.6 to 63.1. Gains over each column’s strongest baseline are 8.4 points on API-Bank, 8.0 on AppWorld, 2.1 on WebShop, 6.0 on ToolBench, and 2.7 on ScienceWorld. The pattern supports learning reusable asset utility across interaction environments.
 
-**Table 2.** Qwen3-8B ablations, reported as mean and standard deviation over three seeds. Trained variants share the full method’s protocol, update budget, and data order. The w/o train control uses the warm start, and Oracle uses measured removal effects. Groups indicate the intervention type.
-
-![Component ablations from Table 2](assets/ablations.png)
-
-**Paired streams support outcome prediction.** Assembler retraining (w/ retrain) reaches 48.4, and removing the curriculum (w/o curric) gives 52.6. Unpaired streams (w/o pairs) and a single stream (w/ single) reach 50.3 and 48.0. Pairing exposes the predictor to comparable tasks under different stores, helping it associate store changes with outcomes.
-
-### Analysis
-
-![Analysis from Figure 2](assets/analysis.png)
-
-**Figure 2.** Credit calibration. (a) Sign agreement and decision counts. (b) Accuracy and abstention at three quantiles. (c) Identification latency and counts. (d) Paired removal estimates and measured effects at 160 positions. The dashed line marks equality.
-
-**The margin selects decisions with reliable signs.** Figure 2(a) reports 99.2% agreement across 480 acted decisions, including 99.8% for 462 in-support queries and 83.3% for 18 out-of-support queries. Abstention covers 117 candidates (19.6%), with 52.1% agreement. Higher quantiles increase abstention and acted accuracy (panel b), supporting evidence accumulation before curation. Further reuse reduces the margin and permits reconsideration.
+**The gains extend to a second backbone and transfer tasks.** On Llama-3.1-8B-Instruct, the average increases from 53.0 to 60.1, improving every benchmark. AppWorld rises from 20.6 to 28.0, supporting transfer of learned asset operations to an environment excluded from training.
 
 ## Getting Started
 

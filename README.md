@@ -24,15 +24,11 @@ on acted decisions.
 
 To learn asset creation and maintenance together, CREDENCE jointly trains three policies.
 
-1. Initialize stores, credit records, and group buffer.
-2. For each collection batch, process the stream episodes. Retrieve assets by greedy coverage, execute the task, and record its trajectory, score, and pool.
-3. Compute retrieval credit and update version records and creator rewards. Sample same-prompt groups for creation and eligible curation, then validate their outputs.
-4. Launch matched continuations and process restoration queries.
-5. Release matured groups within the policy lag limit. Compute group advantages and update policies, encoder, and predictor.
-
 ![Comparison of store evolution strategies](assets/overview.png)
 
 **Figure 1.** Comparison of store evolution strategies. (a) Reuse and local test signals for retention. (b) Memory decisions trained from episode returns while tool evolution follows its own signal. (c) CREDENCE, which co-trains the memory writer, tool builder, and curator with counterfactual credit computed from the observed score and the predicted score under asset removal.
+
+![Algorithm 1](assets/algorithm.png)
 
 ## Results
 
@@ -48,24 +44,24 @@ To learn asset creation and maintenance together, CREDENCE jointly trains three 
 
 ![Component ablations from Table 2](assets/ablations.png)
 
+**Paired streams support outcome prediction.** Assembler retraining (w/ retrain) reaches 48.4, and removing the curriculum (w/o curric) gives 52.6. Unpaired streams (w/o pairs) and a single stream (w/ single) reach 50.3 and 48.0. Pairing exposes the predictor to comparable tasks under different stores, helping it associate store changes with outcomes.
+
 ### Analysis
 
 ![Analysis from Figure 2](assets/analysis.png)
 
 **Figure 2.** Credit calibration. (a) Sign agreement and decision counts. (b) Accuracy and abstention at three quantiles. (c) Identification latency and counts. (d) Paired removal estimates and measured effects at 160 positions. The dashed line marks equality.
 
+**The margin selects decisions with reliable signs.** Figure 2(a) reports 99.2% agreement across 480 acted decisions, including 99.8% for 462 in-support queries and 83.3% for 18 out-of-support queries. Abstention covers 117 candidates (19.6%), with 52.1% agreement. Higher quantiles increase abstention and acted accuracy (panel b), supporting evidence accumulation before curation. Further reuse reduces the margin and permits reconsideration.
+
 ## Getting Started
 
 ### Environment Setup
 
-Use Python 3.10 or later and install PyTorch for your system.
-
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[models]' \
-  --index-url https://pypi.tuna.tsinghua.edu.cn/simple
-export HF_ENDPOINT=https://hf-mirror.com
+conda create -n credence python=3.10 -y
+conda activate credence
+pip install -e '.[models]'
 ```
 
 ### Data Preparation
@@ -74,7 +70,7 @@ Prepare `data/tasks.jsonl` for training and `data/evaluation.jsonl` for evaluati
 Set the benchmark environment paths in `configs/environments.json`.
 The [task format](docs/execution.md) specifies the input fields.
 
-### Training and Evaluation
+## Training
 
 Collect warm-start examples and train the initial policy adapters:
 
@@ -95,6 +91,8 @@ python -m credence train --config configs/qwen3_8b.yaml \
   --tasks data/tasks.jsonl --environments configs/environments.json \
   --warm-start checkpoints/warm_start --output results/credence
 ```
+
+## Evaluation
 
 Evaluate the trained checkpoint on the benchmark tasks:
 

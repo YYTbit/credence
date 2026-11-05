@@ -20,7 +20,19 @@ over the strongest baseline. Ablations support the complementary roles of joint
 training and removal-based credit, while calibration shows 99.2% sign agreement
 on acted decisions.
 
+## Method
+
+To learn asset creation and maintenance together, CREDENCE jointly trains three policies. A memory writer distills experience into reusable instructions, a tool builder creates executable functions, and a curator keeps, merges, splits, or removes assets. Their decisions shape the store used by subsequent tasks.
+
 ![Comparison of store evolution strategies](assets/overview.png)
+
+**Figure 1.** Comparison of store evolution strategies. (a) Reuse and local test signals for retention. (b) Memory decisions trained from episode returns while tool evolution follows its own signal. (c) CREDENCE, which co-trains the memory writer, tool builder, and curator with counterfactual credit computed from the observed score and the predicted score under asset removal.
+
+## Main Results
+
+**Table 1.** Main results under official evaluation settings, as mean and standard deviation over three training seeds on a 0–100 scale. AppWorld measures transfer. Avg. is the unweighted five-benchmark mean. Bold marks the best result per backbone.
+
+![Main results from Table 1](assets/main_results.png)
 
 ## Installation
 

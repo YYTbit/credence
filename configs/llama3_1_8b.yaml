@@ -23,4 +23,5 @@ calibration_stride: 5
 reuse_margin: 0.25
 warmup_episodes: 100
 token_budget: 28000
+credit_query_tokens: 64
 seed: 149

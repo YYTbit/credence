@@ -131,7 +131,10 @@ class APIBankBackend:
             if index >= len(self.calls) or self.calls[index][0] != expected["api_name"] or self.calls[index][1] is None:
                 continue
             api = self.manager.init_tool(expected["api_name"])
-            correct += bool(api.check_api_call_correctness(self.calls[index][1], expected["result"]))
+            try:
+                correct += bool(api.check_api_call_correctness(self.calls[index][1], expected["result"]))
+            except KeyError:
+                continue
         return correct / max(len(self.calls), len(self.expected))
 
     def close(self):
@@ -229,6 +232,10 @@ class NativeSession:
     def __init__(self, benchmark, task, workspace, seed, options):
         self.workspace = Path(workspace).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
+        options = dict(options)
+        for name in ("tool_root_dir", "jar_path"):
+            if options.get(name):
+                options[name] = str(Path(options[name]).resolve())
         sdk_path = options.get("sdk_path")
         if sdk_path:
             sdk_path = str(Path(sdk_path).resolve())
@@ -238,6 +245,8 @@ class NativeSession:
                 sys.path.insert(0, str(Path(sdk_path) / "toolbench" / "tooleval"))
             os.chdir(sdk_path)
         random.seed(seed)
+        import numpy as np
+        np.random.seed(seed % (2 ** 32))
         self.backend = BACKENDS[benchmark](task, self.workspace, seed, options)
         self.token = secrets.token_hex(24)
         self.requests = queue.Queue()

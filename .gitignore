@@ -4,12 +4,14 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+.env.*
 build/
 dist/
 external/
 data/
 checkpoints/
 results/
+outputs/
 *.log
 *.pdf
 *.ppt

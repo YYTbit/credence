@@ -8,9 +8,11 @@ import torch
 import torch.nn.functional as F
 
 from .credit import Calibrator
+from .checkpoint import (compatible_checkpoint, digest, restore_rng,
+                         rng_state, save_bundle)
 from .groups import Candidate, CandidateGroup, GroupBuffer, group_advantages, grpo_loss
 from .retrieval import coverage
-from .runtime import BudgetExhausted, EpisodeUnavailable, Runtime, SCHEMAS, TokenBudget
+from .runtime import BudgetExhausted, EpisodeUnavailable, Runtime, SCHEMAS, TokenBudget, policy_schema
 from .store import Store
 
 
@@ -70,6 +72,7 @@ class Trainer:
         self.fitting = []
         self.calibration = []
         self.streams = []
+        self.run_identity = None
 
     def create_group(self, head, episode, store, stream_id, seed, budget, asset_id=None):
         prompt = self.runtime.prompt(head, episode, store, asset_id)
@@ -80,7 +83,7 @@ class Trainer:
         candidates = []
         for index in range(self.config.group_size):
             sample = self.runtime.complete(head, prompt, self.config.policy_tokens, budget,
-                                           seed + index, SCHEMAS[head])
+                                           seed + index, policy_schema(head, store, asset_id))
             trial = store.clone()
             valid, created = True, None
             payload_tokens = self.models.token_count(sample.text)
@@ -113,7 +116,7 @@ class Trainer:
                                           budget, aid)
             except BudgetExhausted:
                 continue
-        self.runtime.restore(episode.subtasks, store)
+        self.runtime.restore(episode.subtasks, store, budget)
         episode.tokens = budget.used
         return store
 
@@ -229,6 +232,8 @@ class Trainer:
         for group in self.optimizer.param_groups:
             group["lr"] = self.config.learning_rate(self.step)
         self.optimizer.step()
+        if not warmup:
+            self.models.invalidate_embeddings()
         self.step += 1
         for head in active:
             self.head_updates[head] += 1
@@ -239,7 +244,12 @@ class Trainer:
                   "contrastive_loss": float(contrastive.detach()), "predictor_loss": float(model.detach()),
                   "eligible_groups": len(ready), **self.buffer.statistics()})
 
-    def train(self, tasks, episodes_per_stream=160, checkpoint_every=10):
+    def train(self, tasks, episodes_per_stream=160, checkpoint_every=10, input_identity=None):
+        identity = {"tasks": digest(tasks), "episodes_per_stream": episodes_per_stream,
+                    "inputs": input_identity or {}}
+        if self.run_identity is not None and identity != self.run_identity:
+            raise ValueError("Training resume requires the original tasks and environment inputs")
+        self.run_identity = identity
         if not self.streams:
             self.streams = make_streams(tasks, self.models, self.config, episodes_per_stream)
         while any(stream.position < len(stream.order) for stream in self.streams):
@@ -283,9 +293,9 @@ class Trainer:
                 self.update(current)
             if not warm and not current:
                 self.refresh_calibration()
+            self.flush_diagnostics()
             if self.step and self.step % checkpoint_every == 0:
                 self.save(self.output / "checkpoint")
-            self.flush_diagnostics()
         self.save(self.output / "checkpoint")
         return self.buffer.statistics()
 
@@ -300,24 +310,46 @@ class Trainer:
         self.runtime.diagnostics.clear()
 
     def save(self, path):
-        path = Path(path)
-        self.models.save(path)
+        self.flush_diagnostics()
         state = {"optimizer": self.optimizer.state_dict(), "step": self.step,
                  "head_updates": self.head_updates, "serial": self.serial, "buffer": self.buffer,
                  "streams": self.streams, "fitting": self.fitting, "calibration": self.calibration,
-                 "calibrator": self.calibrator.state_dict()}
-        torch.save(state, path / "training.pt")
+                 "calibrator": self.calibrator.state_dict(), "rng": rng_state(),
+                 "run_identity": self.run_identity, "log_positions": {}}
+        for name in ("training.jsonl", "diagnostics.jsonl"):
+            target = self.output / name
+            if target.is_file():
+                import hashlib
+                body = target.read_bytes()
+                state["log_positions"][name] = (len(body), hashlib.sha256(body).hexdigest())
+        evaluation = {"calibrator": self.calibrator.state_dict(),
+                      "stores": {stream.benchmark: stream.store.state_dict() for stream in reversed(self.streams)}}
+        save_bundle(self.models, path, state, evaluation)
 
     def restore(self, path):
+        path = compatible_checkpoint(self.config, path, resume=True)
+        state = torch.load(path / "training.pt", map_location="cpu", weights_only=False)
+        if "rng" not in state:
+            raise ValueError("Training resume requires a checkpoint with RNG state")
         self.models.restore(path)
-        state = torch.load(Path(path) / "training.pt", map_location="cpu", weights_only=False)
+        random_state = state.pop("rng")
+        for name, (offset, checksum) in state.pop("log_positions", {}).items():
+            target = self.output / name
+            if target.is_file():
+                import hashlib
+                with target.open("r+b") as handle:
+                    if hashlib.sha256(handle.read(offset)).hexdigest() != checksum:
+                        raise ValueError("Existing training logs differ from the resumed checkpoint")
+                    handle.truncate(offset)
         self.optimizer.load_state_dict(state.pop("optimizer"))
         self.calibrator.load_state_dict(state.pop("calibrator"))
         for name, value in state.items():
             setattr(self, name, value)
+        restore_rng(random_state)
 
 
-def supervised_warm_start(models, records, output, epochs=1, learning_rate=5e-5):
+def supervised_warm_start(models, records, output, epochs=1, learning_rate=5e-5,
+                          resume=None, checkpoint_every=100):
     samples = []
     for row in records:
         if row.get("head") not in models.heads or not isinstance(row.get("prompt"), str) or not row["prompt"]:
@@ -337,13 +369,35 @@ def supervised_warm_start(models, records, output, epochs=1, learning_rate=5e-5)
     if not samples or set(head for head, _ in samples) != set(models.heads):
         raise ValueError("Warm-start input requires examples for all three heads")
     optimizer = torch.optim.AdamW(models.parameters(), lr=learning_rate)
+    identity = {"records": digest(records), "epochs": epochs, "learning_rate": learning_rate}
+    cursor = 0
+    if resume is not None:
+        checkpoint = compatible_checkpoint(models.config, resume, resume=True)
+        state = torch.load(checkpoint / "training.pt", map_location="cpu", weights_only=False)
+        if state.get("stage") != "sft" or state["identity"] != identity:
+            raise ValueError("SFT resume requires the same examples and training settings")
+        models.restore(checkpoint)
+        optimizer.load_state_dict(state["optimizer"])
+        cursor = state["cursor"]
+        restore_rng(state["rng"])
+    def save(cursor, complete=False):
+        save_bundle(models, output, {"stage": "sft", "optimizer": optimizer.state_dict(),
+                                    "identity": identity, "cursor": cursor, "rng": rng_state(),
+                                    "complete": complete})
     for epoch in range(epochs):
         order = list(samples)
         random.Random(models.config.seed + epoch).shuffle(order)
-        for head, sample in order:
+        for index, (head, sample) in enumerate(order):
+            position = epoch * len(samples) + index
+            if position < cursor:
+                continue
             optimizer.zero_grad(set_to_none=True)
             loss = -models.logprobs(head, sample).mean()
             loss.backward()
             optimizer.step()
+            cursor = position + 1
+            if cursor % checkpoint_every == 0:
+                save(cursor)
     models.refresh_references()
-    models.save(output)
+    models.invalidate_embeddings()
+    save(cursor, complete=True)

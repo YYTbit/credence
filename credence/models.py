@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
@@ -29,6 +30,7 @@ class LanguageModels:
 
     def __init__(self, model, tokenizer, config):
         self.model, self.tokenizer, self.config = model, tokenizer, config
+        self.embedding_cache = OrderedDict()
         self.device = next(model.parameters()).device
         self.projection = Projection(model.config.hidden_size, config.embedding_dim).to(self.device)
         self.outcome = OutcomeModel(config.summary_dim, config.predictor_hidden).to(self.device)
@@ -40,11 +42,20 @@ class LanguageModels:
         self.model.eval()
 
     @classmethod
-    def load(cls, config):
+    def load(cls, config, checkpoint=None):
         from peft import LoraConfig, get_peft_model
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(config.backbone)
-        base = AutoModelForCausalLM.from_pretrained(config.backbone, torch_dtype=getattr(torch, config.dtype))
+        from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, set_seed
+        from .checkpoint import compatible_checkpoint
+        if checkpoint is not None:
+            checkpoint = compatible_checkpoint(config, checkpoint)
+        set_seed(config.seed)
+        base = AutoModelForCausalLM.from_pretrained(config.backbone, revision=config.revision,
+                                                   torch_dtype=getattr(torch, config.dtype))
+        config.revision = getattr(base.config, "_commit_hash", None) or config.revision
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint / "tokenizer" if checkpoint is not None else config.backbone,
+                                                  **({} if checkpoint is not None else {"revision": config.revision}))
+        if checkpoint is not None and (checkpoint / "generation_config.json").is_file():
+            base.generation_config = GenerationConfig.from_pretrained(checkpoint)
         adapter = LoraConfig(r=config.adapter_rank, lora_alpha=config.adapter_alpha,
                              lora_dropout=0, target_modules="all-linear", task_type="CAUSAL_LM")
         model = get_peft_model(base, adapter, adapter_name="writer")
@@ -56,6 +67,8 @@ class LanguageModels:
         model.to(config.device)
         instance = cls(model, tokenizer, config)
         instance.refresh_references()
+        if checkpoint is not None:
+            instance.restore(checkpoint)
         return instance
 
     def select(self, head):
@@ -95,7 +108,24 @@ class LanguageModels:
         return self.tokenizer.decode(self.tokenizer.encode(text, add_special_tokens=False)[:limit],
                                      skip_special_tokens=True)
 
+    def invalidate_embeddings(self):
+        self.embedding_cache.clear()
+
     def encode(self, texts, grad=False):
+        if grad or not texts:
+            return self._encode(texts, grad)
+        missing = list(dict.fromkeys(text for text in texts if text not in self.embedding_cache))
+        if missing:
+            values = self._encode(missing, False).detach().cpu()
+            self.embedding_cache.update(zip(missing, values))
+        result = torch.stack([self.embedding_cache[text] for text in texts]).to(self.device)
+        for text in texts:
+            self.embedding_cache.move_to_end(text)
+        while len(self.embedding_cache) > max(2048, 4 * self.config.store_capacity):
+            self.embedding_cache.popitem(last=False)
+        return result
+
+    def _encode(self, texts, grad=False):
         if not texts:
             return torch.zeros((0, self.config.embedding_dim), device=self.device)
         self.select("encoder")
@@ -156,7 +186,7 @@ class LanguageModels:
                 if stopping(inputs, None).item():
                     break
         text = self.tokenizer.decode(output, skip_special_tokens=True)
-        return Sample(prompt, ids, output, text, torch.stack(probabilities), schema)
+        return Sample(prompt, ids, output, text, torch.stack(probabilities), schema, seed)
 
     def logprobs(self, head, sample, grad=True):
         self.select(head)
@@ -180,16 +210,24 @@ class LanguageModels:
         self.model.save_pretrained(path / "adapters", selected_adapters=list(self.heads) + ["encoder"]
                                    + [head + "_ref" for head in self.heads])
         self.tokenizer.save_pretrained(path / "tokenizer")
+        self.model.generation_config.save_pretrained(path)
         torch.save({"projection": self.projection.state_dict(), "outcome": self.outcome.state_dict()},
                    path / "auxiliary.pt")
         self.config.save(path / "config.yaml")
 
     def restore(self, path):
         from peft import load_peft_weights, set_peft_model_state_dict
-        path = Path(path)
+        from transformers import AutoTokenizer, GenerationConfig
+        from .checkpoint import compatible_checkpoint
+        path = compatible_checkpoint(self.config, path)
         for head in (*self.heads, "encoder", *(head + "_ref" for head in self.heads)):
             state = load_peft_weights(str(path / "adapters" / head), device=str(self.device))
             set_peft_model_state_dict(self.model, state, adapter_name=head)
         state = torch.load(path / "auxiliary.pt", map_location=self.device, weights_only=True)
         self.projection.load_state_dict(state["projection"])
         self.outcome.load_state_dict(state["outcome"])
+        self.tokenizer = AutoTokenizer.from_pretrained(path / "tokenizer")
+        self.tokenizer.padding_side = "right"
+        if (path / "generation_config.json").is_file():
+            self.model.generation_config = GenerationConfig.from_pretrained(path)
+        self.invalidate_embeddings()

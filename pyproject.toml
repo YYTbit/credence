@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credence-agent"
-version = "1.0.0"
+version = "1.1.0"
 description = "CREDENCE: Co-Evolving Memory, Tools, and Curation for Long-Horizon Agents via Counterfactual Credit"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.6,<3", "PyYAML>=6,<7", "scikit-learn==1.7.2"]
+dependencies = ["torch>=2.6,<3", "PyYAML>=6,<7", "numpy>=1.26,<3", "scikit-learn==1.7.2"]
 
 [project.optional-dependencies]
 models = ["transformers==4.57.3", "peft==0.17.1", "accelerate>=1.5,<2", "lm-format-enforcer==0.11.3"]

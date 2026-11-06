@@ -1,4 +1,5 @@
 import ast
+import copy
 import json
 import re
 import subprocess
@@ -26,6 +27,17 @@ SCHEMAS = {
     "actor": {"type": "object", "properties": {"action": {"enum": ["shell", "py", "final"]},
               "content": {"type": "string"}}, "required": ["action", "content"], "additionalProperties": False},
 }
+
+
+def policy_schema(head, store, asset_id=None):
+    schema = copy.deepcopy(SCHEMAS[head])
+    if head == "curator":
+        asset = store.assets[asset_id]
+        targets = [aid for aid, other in store.assets.items() if aid != asset_id and other.kind == asset.kind]
+        schema["properties"]["asset_id"] = {"enum": [asset_id]}
+        schema["properties"]["target"] = ({"anyOf": [{"type": "null"}, {"type": "string", "enum": targets}]}
+                                              if targets else {"type": "null"})
+    return schema
 
 
 class BudgetExhausted(Exception):
@@ -80,7 +92,9 @@ class Runtime:
         tasks, embeddings, assets = self.embeddings(store, subtasks, exclude, insert, grad)
         return pool_summary(tasks, embeddings, assets, self.config.context_budget)
 
-    def prediction(self, summary):
+    def prediction(self, summary, budget=None):
+        if budget is not None:
+            budget.consume(self.config.credit_query_tokens)
         with torch.no_grad():
             return float(self.models.outcome(summary).item())
 
@@ -116,6 +130,10 @@ class Runtime:
                 subtasks = [task["text"]]
             task_embeddings, asset_embeddings, assets = self.embeddings(start, subtasks)
             chosen, _ = greedy_select(task_embeddings, asset_embeddings, self.config.context_budget)
+            # Reserve the paper's per-asset removal-query charge before acting.
+            credit_reserve = len(chosen) * self.config.credit_query_tokens
+            budget.reserve(credit_reserve)
+            budget.limit -= credit_reserve
             assembled = [assets[i].asset_id for i in chosen]
             context = "\n\n".join(
                 f"{assets[i].kind} {assets[i].asset_id}"
@@ -165,10 +183,13 @@ class Runtime:
 
     def credit(self, episode, store):
         values = {}
+        budget = TokenBudget(self.config.token_budget, episode.tokens)
         for aid in episode.assembled:
+            budget.reserve(self.config.credit_query_tokens)
             # Removing one asset from the summary estimates its marginal contribution to this outcome.
             summary = self.summary(episode.store, episode.subtasks, exclude=aid)
-            value = episode.score - self.prediction(summary)
+            value = episode.score - self.prediction(summary, budget)
+            episode.tokens = budget.used
             if aid in store.assets:
                 store.observe(aid, value)
                 values[aid] = value
@@ -176,26 +197,35 @@ class Runtime:
                                      "value": value, "supported": self.calibrator.supported(summary)})
         if store.episode % self.config.restoration_horizon == 0:
             for aid in store.assets.keys() - set(episode.assembled):
-                value = episode.score - self.prediction(self.summary(episode.store, episode.subtasks, exclude=aid))
+                if budget.used + self.config.credit_query_tokens > budget.limit:
+                    break
+                value = episode.score - self.prediction(self.summary(episode.store, episode.subtasks, exclude=aid), budget)
+                episode.tokens = budget.used
                 self.diagnostics.append({"event": "idle_query", "asset_id": aid, "value": value})
         return values
 
-    def restore(self, subtasks, store):
+    def restore(self, subtasks, store, budget=None):
+        if not store.buffer:
+            return
+        if budget is not None and budget.used + self.config.credit_query_tokens > budget.limit:
+            return
         base = self.summary(store, subtasks)
-        baseline = self.prediction(base)
+        baseline = self.prediction(base, budget)
         current = self.selection(store, subtasks)
         for aid in list(store.buffer):
+            if budget is not None and budget.used + 2 * self.config.credit_query_tokens > budget.limit:
+                break
             asset = store.buffer[aid].asset
             summary = self.summary(store, subtasks, insert=asset)
             changed = self.selection(store, subtasks, insert=asset) != current
             supported = self.calibrator.supported(summary)
-            gain = self.prediction(summary) - baseline
+            gain = self.prediction(summary, budget) - baseline
             restored = store.restore(aid, gain, supported, changed)
             self.diagnostics.append({"event": "restoration", "asset_id": aid, "new_version": restored,
                                      "gain": gain, "supported": supported, "context_changed": changed})
             if restored:
                 base = self.summary(store, subtasks)
-                baseline = self.prediction(base)
+                baseline = self.prediction(base, budget)
                 current = self.selection(store, subtasks)
 
     def partition(self, keywords):
@@ -275,12 +305,13 @@ class Runtime:
                 continue
             try:
                 sample = self.complete("curator", self.prompt("curator", episode, store, aid),
-                                       self.config.policy_tokens, budget, seed + 2 + offset, SCHEMAS["curator"])
+                                       self.config.policy_tokens, budget, seed + 2 + offset,
+                                       policy_schema("curator", store, aid))
                 trial = store.clone()
                 self.apply("curator", sample, episode, trial, aid)
                 store = trial
             except (BudgetExhausted, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
                 continue
-        self.restore(episode.subtasks, store)
+        self.restore(episode.subtasks, store, budget)
         episode.tokens = budget.used
         return store

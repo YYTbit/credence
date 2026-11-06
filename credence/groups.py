@@ -11,6 +11,7 @@ class Sample:
     text: str
     behavior_logprobs: torch.Tensor
     schema: dict | None = None
+    seed: int | None = None
 
 
 @dataclass

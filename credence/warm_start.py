@@ -1,10 +1,12 @@
-import hashlib
 import json
 import random
+import subprocess
 from pathlib import Path
 
 from .credit import Calibrator
-from .runtime import EpisodeUnavailable, Runtime, SCHEMAS, TokenBudget
+from .checkpoint import file_digest, write_json
+from .records import Collection
+from .runtime import EpisodeUnavailable, Runtime, TokenBudget, policy_schema
 from .training import TRAIN_BENCHMARKS, initial_store
 
 
@@ -43,12 +45,6 @@ def _round_robin(tasks, count, seed):
     return plan, len(nontrain)
 
 
-def _write_jsonl(path, records):
-    with Path(path).open("w", encoding="utf-8") as handle:
-        for row in records:
-            handle.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
-
-
 def _response(sample):
     value = json.loads(sample.text)
     if not isinstance(value, dict):
@@ -60,7 +56,7 @@ def _target(runtime, head, episode, store, seed, asset_id=None):
     prompt = runtime.prompt(head, episode, store, asset_id)
     budget = TokenBudget(runtime.config.token_budget)
     sample = runtime.complete("agent", prompt, runtime.config.policy_tokens, budget,
-                              seed, SCHEMAS[head], sample=True)
+                              seed, policy_schema(head, store, asset_id), sample=True)
     response = _response(sample)
     trial = store.clone()
     runtime.apply(head, sample, episode, trial, asset_id)
@@ -78,12 +74,23 @@ def collect_warm_start(models, environments, config, tasks, output, count=1000, 
     if missing:
         raise ValueError(f"Training environments missing for {sorted(missing)}")
     output = Path(output)
-    if output.exists() and any(output.iterdir()):
-        raise FileExistsError("Warm-start output directory must be empty")
-    output.mkdir(parents=True, exist_ok=True)
     runtime = runtime_factory(models, Calibrator(config.calibration_quantile, config.reuse_margin), config)
-    trajectories, examples, rejected = [], [], dict.fromkeys(HEADS, 0)
-    for index, task in enumerate(plan):
+    model_config = getattr(models.model, "config", None)
+    identity = {"stage": "warm-start", "plan": plan, "seed": seed, "config": vars(config),
+                "base_revision": getattr(model_config, "_commit_hash", None), "inputs": input_hashes or {}}
+    with Collection(output, identity, ("trajectories.jsonl", "head_examples.jsonl")) as collection:
+        return _collect(models, environments, config, plan, seed, runtime, output,
+                        collection, count, excluded, input_hashes)
+
+
+def _collect(models, environments, config, plan, seed, runtime, output, collection,
+             count, excluded, input_hashes):
+    metadata = collection.state["metadata"]
+    counts = metadata.get("head_counts", dict.fromkeys(HEADS, 0))
+    rejected = metadata.get("rejected", dict.fromkeys(HEADS, 0))
+    for index in range(collection.cursor, len(plan)):
+        task = plan[index]
+        examples = []
         row_seed = seed + index
         store = initial_store(models, config, row_seed)
         try:
@@ -92,16 +99,16 @@ def collect_warm_start(models, environments, config, tasks, output, count=1000, 
         except EpisodeUnavailable as exc:
             raise RuntimeError(f"Base-model rollout unavailable for {task['benchmark']}:{task['task_id']}") from exc
         trajectory_id = f"warm-{index:06d}"
-        trajectories.append({"trajectory_id": trajectory_id, "benchmark": task["benchmark"],
+        trajectory = {"trajectory_id": trajectory_id, "benchmark": task["benchmark"],
                              "task_id": task["task_id"], "split": "train", "seed": row_seed,
                              "task": task, "score": episode.score, "subtasks": episode.subtasks,
                              "assembled": episode.assembled, "actions": episode.trajectory,
                              "evidence": episode.evidence, "tokens": episode.tokens,
-                             "completed": episode.completed, "initial_store": store.state_dict()})
+                             "completed": episode.completed, "initial_store": store.state_dict()}
         for head in ("writer", "builder"):
             try:
                 example = _target(runtime, head, episode, store, row_seed + 1000 + HEADS.index(head))
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except (ValueError, TypeError, KeyError, AttributeError, subprocess.TimeoutExpired):
                 rejected[head] += 1
                 continue
             example.update({"trajectory_id": trajectory_id, "benchmark": task["benchmark"],
@@ -113,26 +120,27 @@ def collect_warm_start(models, environments, config, tasks, output, count=1000, 
             try:
                 example = _target(runtime, "curator", episode, store,
                                   row_seed + 2000 + offset, asset_id)
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except (ValueError, TypeError, KeyError, AttributeError, subprocess.TimeoutExpired):
                 rejected["curator"] += 1
                 continue
             example.update({"trajectory_id": trajectory_id, "benchmark": task["benchmark"],
                             "task_id": task["task_id"], "split": "train", "rollout_seed": row_seed})
             examples.append(example)
-    counts = {head: sum(row["head"] == head for row in examples) for head in HEADS}
+        for row in examples:
+            counts[row["head"]] += 1
+        collection.commit({"trajectories.jsonl": [trajectory], "head_examples.jsonl": examples},
+                          {"head_counts": counts, "rejected": rejected})
     if any(counts[head] == 0 for head in HEADS):
         raise ValueError(f"No validated warm-start targets for every head: {counts}")
     trajectory_path = output / "trajectories.jsonl"
     example_path = output / "head_examples.jsonl"
-    _write_jsonl(trajectory_path, trajectories)
-    _write_jsonl(example_path, examples)
     model_config = getattr(models.model, "config", None)
     manifest = {
         "protocol": "CREDENCE Appendix B.10 base-model rollout warm start",
         "requested_trajectories": count,
-        "collected_trajectories": len(trajectories),
+        "collected_trajectories": collection.cursor,
         "round_robin_benchmarks": list(TRAIN_BENCHMARKS),
-        "trajectories_per_benchmark": {name: sum(row["benchmark"] == name for row in trajectories)
+        "trajectories_per_benchmark": {name: sum(row["benchmark"] == name for row in plan)
                                        for name in TRAIN_BENCHMARKS},
         "split": "train",
         "excluded_nontrain_records": excluded,
@@ -141,14 +149,15 @@ def collect_warm_start(models, environments, config, tasks, output, count=1000, 
         "base_policy": {"backbone": config.backbone,
                         "resolved_revision": getattr(model_config, "_commit_hash", None),
                         "adapters_disabled": True,
-                        "rollout_decoding": "greedy runtime policy; the paper does not specify a decoding temperature"},
+                        "rollout_decoding": "greedy"},
         "seed": seed,
         "input_sha256": input_hashes or {},
         "files": {
-            "trajectories.jsonl": hashlib.sha256(trajectory_path.read_bytes()).hexdigest(),
-            "head_examples.jsonl": hashlib.sha256(example_path.read_bytes()).hexdigest(),
+            "trajectories.jsonl": file_digest(trajectory_path),
+            "head_examples.jsonl": file_digest(example_path),
         },
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-                                            encoding="utf-8")
+    write_json(output / "manifest.json", manifest)
+    if not collection.state["complete"]:
+        collection.commit({}, complete=True)
     return manifest

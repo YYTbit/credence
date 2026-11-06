@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass, fields
+import math
 from pathlib import Path
 
 import yaml
@@ -7,6 +8,7 @@ import yaml
 @dataclass
 class Config:
     backbone: str = "Qwen/Qwen3-8B"
+    revision: str | None = None
     device: str = "cpu"
     dtype: str = "float32"
     context_budget: int = 24
@@ -35,6 +37,7 @@ class Config:
     reuse_margin: float = 0.25
     warmup_episodes: int = 100
     token_budget: int = 28000
+    credit_query_tokens: int = 64
     max_steps: int = 50
     max_subtasks: int = 10
     encoder_tokens: int = 512
@@ -51,14 +54,21 @@ class Config:
     gradient_checkpointing: bool = True
 
     def __post_init__(self):
+        self.order_seeds, self.store_seeds = tuple(self.order_seeds), tuple(self.store_seeds)
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if isinstance(value, (int, float)) and not math.isfinite(value):
+                raise ValueError(f"Configuration field {item.name} requires a finite value")
         positive = ("context_budget", "store_capacity", "credit_horizon",
                     "restoration_horizon", "embedding_dim", "predictor_hidden",
                     "adapter_rank", "adapter_alpha", "calibration_stride",
-                    "token_budget", "max_steps", "max_subtasks", "encoder_tokens",
+                    "token_budget", "credit_query_tokens", "max_steps", "max_subtasks", "encoder_tokens",
                     "encoder_batch", "card_tokens", "policy_tokens", "planner_tokens", "actor_tokens",
                     "learning_rate_offset")
-        if any(getattr(self, name) < 1 for name in positive):
+        if any(type(getattr(self, name)) is not int or getattr(self, name) < 1 for name in positive):
             raise ValueError("Counts and dimensions require positive values")
+        if any(type(getattr(self, name)) is not int for name in ("group_size", "max_policy_lag", "warmup_episodes")):
+            raise ValueError("Group, lag, and warm-up counts require integers")
         if self.group_size < 2 or self.max_policy_lag < 0 or self.warmup_episodes < 0:
             raise ValueError("Invalid group, lag, or warm-up setting")
         if not 0 < self.calibration_quantile < 1:
@@ -67,6 +77,10 @@ class Config:
             raise ValueError("Invalid policy objective setting")
         if self.contrastive_temperature <= 0 or self.learning_rate_scale <= 0:
             raise ValueError("Temperature and learning-rate scale require positive values")
+        if self.gradient_norm <= 0 or self.dtype not in ("float32", "float16", "bfloat16"):
+            raise ValueError("Invalid gradient norm or model dtype")
+        if any(type(value) is not int or value < 0 for value in (self.seed, *self.order_seeds, *self.store_seeds)):
+            raise ValueError("Seeds require nonnegative integers")
         if len(self.order_seeds) != 4 or len(self.store_seeds) != 8:
             raise ValueError("Stream construction requires four order seeds and eight store seeds")
         for name in ("token_cost", "encoder_weight", "predictor_weight",

@@ -95,8 +95,9 @@ class Store:
 
     def restore(self, aid, gain, supported, context_changed):
         entry = self.buffer[aid]
-        if supported and context_changed:
-            entry.gains.append(float(gain))
+        if not supported or not context_changed:
+            return None
+        entry.gains.append(float(gain))
         if not entry.gains or sum(entry.gains) / len(entry.gains) <= 0:
             return None
         if len(self.assets) >= self.capacity:

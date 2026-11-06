@@ -22,7 +22,13 @@ on acted decisions.
 
 ## Algorithm Flow
 
-To learn asset creation and maintenance together, CREDENCE jointly trains three policies.
+To learn asset creation and maintenance together, CREDENCE jointly trains three
+policies. A memory writer distills experience into reusable instructions, a tool
+builder creates executable functions, and a curator keeps, merges, splits, or
+removes assets. Their decisions shape the store used by subsequent tasks. We
+first formalize this interaction, then describe the framework and removal-based
+credit, and finally explain how delayed feedback supports joint optimization.
+Figure 1 gives an overview.
 
 ![Comparison of store evolution strategies](assets/overview.png)
 
@@ -56,28 +62,44 @@ pip install -e '.[models]'
 
 Prepare `data/tasks.jsonl` for training and `data/evaluation.jsonl` for evaluation.
 Set the benchmark environment paths in `configs/environments.json`.
-The [task format](docs/execution.md) specifies the input fields.
+The [preparation guide](docs/execution.md) links the five official environments
+and specifies the task fields.
+
+Select either backbone for the complete workflow below.
+
+```bash
+MODEL=qwen3_8b  # Qwen3-8B
+# MODEL=llama3_1_8b  # Llama-3.1-8B-Instruct
+```
 
 ## Training
 
 Collect warm-start examples and train the initial policy adapters:
 
 ```bash
-python -m credence collect-warm-start --config configs/qwen3_8b.yaml \
+python -m credence collect-warm-start --config configs/${MODEL}.yaml \
   --tasks data/tasks.jsonl --environments configs/environments.json \
-  --output data/warm_start
+  --output data/warm_start/${MODEL}
 
-python -m credence sft --config configs/qwen3_8b.yaml \
-  --examples data/warm_start/head_examples.jsonl \
-  --output checkpoints/warm_start
+python -m credence sft --config configs/${MODEL}.yaml \
+  --examples data/warm_start/${MODEL}/head_examples.jsonl \
+  --output checkpoints/warm_start/${MODEL}
 ```
 
 Initialize joint training with the adapters trained above:
 
 ```bash
-python -m credence train --config configs/qwen3_8b.yaml \
+python -m credence train --config configs/${MODEL}.yaml \
   --tasks data/tasks.jsonl --environments configs/environments.json \
-  --warm-start checkpoints/warm_start --output results/credence
+  --warm-start checkpoints/warm_start/${MODEL} --output results/${MODEL}/train
+```
+
+Resume joint training from its latest committed checkpoint:
+
+```bash
+python -m credence train --config configs/${MODEL}.yaml \
+  --tasks data/tasks.jsonl --environments configs/environments.json \
+  --resume results/${MODEL}/train/checkpoint --output results/${MODEL}/train
 ```
 
 ## Evaluation
@@ -85,10 +107,15 @@ python -m credence train --config configs/qwen3_8b.yaml \
 Evaluate the trained checkpoint on the benchmark tasks:
 
 ```bash
-python -m credence run --checkpoint results/credence/checkpoint \
+python -m credence run --config configs/${MODEL}.yaml \
+  --checkpoint results/${MODEL}/train/checkpoint \
   --tasks data/evaluation.jsonl --environments configs/environments.json \
-  --output results/evaluation
+  --output results/${MODEL}/evaluation
 ```
+
+Repeat the collection or evaluation command with the same output directory to
+continue an interrupted run. SFT recovery is described in the
+[preparation guide](docs/execution.md#resuming-training).
 
 ## License
 

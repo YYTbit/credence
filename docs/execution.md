@@ -87,7 +87,7 @@ python -m credence train --config configs/${MODEL}.yaml \
 
 Checkpoints contain the native adapters, tokenizer, generation configuration, projection and outcome model. Training state includes optimizer moments, RNG state, stream positions, version ledgers, pending candidate groups, calibration records, and policy-update counts. Resume retains the original task and environment inputs. Every fifth stream position supplies calibration data and is excluded from policy and predictor updates.
 
-After predictor warm-up, training orders benchmark stages by observed training reward density. The running-score monitor advances a stage at a plateau or when its stream schedule completes. Joint continuation consumes the remaining scheduled episodes. Stage state and the native early-stopping counter are included in checkpoints.
+Joint training schedules six epochs over each prepared training distribution. After predictor warm-up, training orders benchmark stages by observed training reward density. The running-score monitor advances a stage at a plateau or when its stream schedule completes. Joint continuation consumes the remaining scheduled episodes. Stage state and the native early-stopping counter are included in checkpoints. Resume retains the checkpoint's original schedule.
 
 ## Evaluation
 

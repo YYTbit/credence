@@ -22,6 +22,7 @@ calibration_quantile: 0.90
 calibration_stride: 5
 reuse_margin: 0.25
 warmup_episodes: 100
+training_epochs: 6
 token_budget: 28000
 credit_query_tokens: 64
 curriculum: true

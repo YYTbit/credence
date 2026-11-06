@@ -40,21 +40,22 @@ def initial_store(models, config, seed):
     return store
 
 
-def make_streams(tasks, models, config, length):
+def make_streams(tasks, models, config, length=None):
     streams = []
     for pair, benchmark in enumerate(TRAIN_BENCHMARKS):
         available = [task for task in tasks if task["benchmark"] == benchmark and task["split"] == "train"]
         if not available:
             raise ValueError(f"Training tasks missing for {benchmark}")
+        stream_length = config.training_epochs * len(available) if length is None else length
         order = []
         rng = random.Random(config.order_seeds[pair])
-        while len(order) < length:
+        while len(order) < stream_length:
             chunk = list(available)
             rng.shuffle(chunk)
             order.extend(chunk)
         for stream in range(2):
             sid = 2 * pair + stream
-            streams.append(Stream(sid, benchmark, initial_store(models, config, config.store_seeds[sid]), order[:length]))
+            streams.append(Stream(sid, benchmark, initial_store(models, config, config.store_seeds[sid]), order[:stream_length]))
     return streams
 
 
@@ -256,7 +257,9 @@ class Trainer:
                   "contrastive_loss": float(contrastive.detach()), "predictor_loss": float(model.detach()),
                   "eligible_groups": len(ready), **self.buffer.statistics()})
 
-    def train(self, tasks, episodes_per_stream=160, checkpoint_every=10, input_identity=None):
+    def train(self, tasks, episodes_per_stream=None, checkpoint_every=10, input_identity=None):
+        if episodes_per_stream is None and self.run_identity is not None:
+            episodes_per_stream = self.run_identity["episodes_per_stream"]
         identity = {"tasks": digest(tasks), "episodes_per_stream": episodes_per_stream,
                     "inputs": input_identity or {}}
         if self.run_identity is not None and identity != self.run_identity:

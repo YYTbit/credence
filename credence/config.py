@@ -36,6 +36,7 @@ class Config:
     calibration_stride: int = 5
     reuse_margin: float = 0.25
     warmup_episodes: int = 100
+    training_epochs: int = 6
     curriculum: bool = True
     curriculum_window: int = 21
     curriculum_patience: int = 1
@@ -69,7 +70,7 @@ class Config:
                     "token_budget", "credit_query_tokens", "max_steps", "max_subtasks", "encoder_tokens",
                     "encoder_batch", "card_tokens", "policy_tokens", "planner_tokens", "actor_tokens",
                     "learning_rate_offset")
-        positive += ("curriculum_window", "curriculum_patience")
+        positive += ("training_epochs", "curriculum_window", "curriculum_patience")
         if any(type(getattr(self, name)) is not int or getattr(self, name) < 1 for name in positive):
             raise ValueError("Counts and dimensions require positive values")
         if any(type(getattr(self, name)) is not int for name in ("group_size", "max_policy_lag", "warmup_episodes")):

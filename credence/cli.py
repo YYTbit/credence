@@ -34,7 +34,8 @@ def parser():
     starts.add_argument("--warm-start")
     starts.add_argument("--resume")
     train.add_argument("--output", required=True)
-    train.add_argument("--episodes-per-stream", type=int, default=160)
+    train.add_argument("--episodes-per-stream", type=int, default=None,
+                       help="Override the configured epoch schedule with a fixed stream length")
     train.add_argument("--checkpoint-every", type=int, default=10)
     run = commands.add_parser("run", help="Execute official evaluation tasks using a trained checkpoint")
     run.add_argument("--checkpoint", required=True)
@@ -91,7 +92,8 @@ def main(argv=None):
         available = {task["benchmark"] for task in tasks if task["split"] == "train"}
         if set(TRAIN_BENCHMARKS) - available:
             raise ValueError("Joint training requires all four training distributions")
-        if args.episodes_per_stream < 1 or args.checkpoint_every < 1:
+        if ((args.episodes_per_stream is not None and args.episodes_per_stream < 1)
+                or args.checkpoint_every < 1):
             raise ValueError("Training and checkpoint counts require positive values")
         if args.resume is None and (Path(args.output) / "checkpoint").exists():
             raise FileExistsError("Training output already contains a checkpoint; use --resume")
@@ -105,6 +107,8 @@ def main(argv=None):
             header = resolve_checkpoint(args.resume) / "complete.json"
             if header.is_file():
                 metadata = json.loads(header.read_text(encoding="utf-8"))
+                if args.episodes_per_stream is None and metadata.get("run_identity") is not None:
+                    args.episodes_per_stream = metadata["run_identity"]["episodes_per_stream"]
                 identity = {"tasks": digest(tasks), "episodes_per_stream": args.episodes_per_stream,
                             "inputs": input_identity}
                 if metadata["stage"] != "joint" or metadata["run_identity"] != identity:

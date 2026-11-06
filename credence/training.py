@@ -142,6 +142,9 @@ class Trainer:
             group.reference_scores.append(episode.score)
             self.runtime.credit(episode, reference)
             group.reference_store = self.runtime.evolve(episode, reference, seed + 70000)
+            self.log({"event": "continuation", "group": group.group_id, "branch": "reference",
+                      "benchmark": stream.benchmark, "task_id": task["task_id"],
+                      "seed": seed, "score": episode.score, "tokens": episode.tokens})
         for index, candidate in enumerate(group.candidates):
             if candidate.reward is not None or (not candidate.valid and group.head != "curator"):
                 continue
@@ -151,6 +154,9 @@ class Trainer:
             candidate.scores.append(episode.score)
             self.runtime.credit(episode, candidate.store)
             candidate.store = self.runtime.evolve(episode, candidate.store, seed + 70000)
+            self.log({"event": "continuation", "group": group.group_id, "branch": index,
+                      "benchmark": stream.benchmark, "task_id": task["task_id"],
+                      "seed": seed, "score": episode.score, "tokens": episode.tokens})
         group.mature(max(candidate.store.episode for candidate in group.candidates),
                      self.config.credit_horizon, self.config.token_cost)
 
@@ -161,6 +167,9 @@ class Trainer:
             removed.retire(aid, buffered=False)
             paired = self.runtime.run_episode(episode.task, removed, environment, workspace / aid, episode.seed)
             cases.append((removed, paired.score))
+            self.log({"event": "calibration_removal", "benchmark": episode.task["benchmark"],
+                      "task_id": episode.task["task_id"], "asset_id": aid,
+                      "seed": episode.seed, "score": paired.score, "tokens": paired.tokens})
         self.calibration.append((episode.subtasks, cases))
 
     def refresh_calibration(self):

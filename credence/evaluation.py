@@ -9,19 +9,38 @@ from .environments import BENCHMARKS
 from .records import Collection
 from .runtime import EpisodeUnavailable, Runtime
 from .store import Store
-from .training import initial_store
+from .retrieval import greedy_select
+
+
+def select_transfer_store(models, config, sources, task):
+    if not sources:
+        raise ValueError("Transfer evaluation requires trained source stores")
+    best, best_score = None, -1.0
+    for source in sources:
+        store = source["store"]
+        encoded = models.encode([task["text"]] + [asset.text for asset in store.assets.values()])
+        _, score = greedy_select(encoded[:1], encoded[1:], config.context_budget)
+        score = float(score)
+        if score > best_score:
+            best, best_score = source, score
+    return best["store"].clone(), best["stream"], best_score
 
 
 def evaluate(models, environments, config, tasks, checkpoint, output, seed=149,
              input_identity=None):
     root = resolve_checkpoint(checkpoint)
     if (root / "evaluation.pt").is_file():
-        state = torch.load(root / "evaluation.pt", map_location="cpu", weights_only=False)
+        state = torch.load(root / "evaluation.pt", map_location="cpu", weights_only=True)
         stores = {name: Store.from_state_dict(value) for name, value in state["stores"].items()}
+        sources = [{**source, "store": Store.from_state_dict(source["store"])}
+                   for source in state.get("source_stores", [])]
+        if not sources:
+            sources = [{"stream": index, "store": store} for index, store in enumerate(stores.values())]
     else:
         # Earlier checkpoints remain usable without allocating a training optimizer.
         state = torch.load(root / "training.pt", map_location="cpu", weights_only=False)
         stores = {stream.benchmark: stream.store for stream in reversed(state["streams"])}
+        sources = [{"stream": stream.stream_id, "store": stream.store} for stream in state["streams"]]
     calibrator = Calibrator(config.calibration_quantile, config.reuse_margin)
     calibrator.load_state_dict(state["calibrator"])
     runtime = Runtime(models, calibrator, config)
@@ -43,11 +62,14 @@ def evaluate(models, environments, config, tasks, checkpoint, output, seed=149,
             index, position, task = plan[cursor]
             benchmark = task["benchmark"]
             base_store = stores.get(benchmark)
-            store = (base_store.clone() if base_store is not None
-                     else initial_store(models, config, seed + index))
-            store.advance()
             row = {"benchmark": benchmark, "task_id": task["task_id"], "seed": seed + position,
                    "backbone": config.backbone}
+            if base_store is None:
+                store, source, coverage = select_transfer_store(models, config, sources, task)
+                row.update(source_stream=source, source_coverage=coverage)
+            else:
+                store = base_store.clone()
+            store.advance()
             try:
                 episode = runtime.run_episode(task, store, environments[benchmark],
                                               output / "workspaces" / benchmark / str(position), seed + position)

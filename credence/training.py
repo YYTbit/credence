@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from .credit import Calibrator
+from .curriculum import Curriculum
 from .checkpoint import (compatible_checkpoint, digest, restore_rng,
                          rng_state, save_bundle)
 from .groups import Candidate, CandidateGroup, GroupBuffer, group_advantages, grpo_loss
@@ -73,6 +74,8 @@ class Trainer:
         self.calibration = []
         self.streams = []
         self.run_identity = None
+        self.curriculum = Curriculum(config)
+        self.pending_records = {"warm": [], "joint": []}
 
     def create_group(self, head, episode, store, stream_id, seed, budget, asset_id=None):
         prompt = self.runtime.prompt(head, episode, store, asset_id)
@@ -261,9 +264,15 @@ class Trainer:
         self.run_identity = identity
         if not self.streams:
             self.streams = make_streams(tasks, self.models, self.config, episodes_per_stream)
+        last_saved_step = self.step
         while any(stream.position < len(stream.order) for stream in self.streams):
             warm, current = [], []
-            for stream in self.streams:
+            before_stage = (self.curriculum.phase, self.curriculum.stage)
+            active = self.curriculum.active(self.streams)
+            if before_stage != (self.curriculum.phase, self.curriculum.stage):
+                self.log({"event": "curriculum", "phase": self.curriculum.phase,
+                          "stage": self.curriculum.stage, "order": self.curriculum.order})
+            for stream in active:
                 if stream.position >= len(stream.order):
                     continue
                 task = stream.order[stream.position]
@@ -296,17 +305,35 @@ class Trainer:
                           "score": record.score, "tokens": record.tokens, "assembled": record.assembled,
                           "store_size": len(stream.store.assets)})
                 stream.position += 1
-            if warm:
-                self.update(warm, warmup=True)
-            if current:
-                self.update(current)
+            self.pending_records["warm"].extend(warm)
+            self.pending_records["joint"].extend(current)
+            phase_complete = (all(stream.position >= len(stream.order) for stream in active)
+                              or (self.curriculum.phase == "warmup" and all(
+                                  stream.position >= min(self.config.warmup_episodes, len(stream.order))
+                                  for stream in self.streams)))
+            observed_stage = self.curriculum.stage
+            self.consume_records(force=phase_complete)
+            if self.curriculum.stage != observed_stage:
+                self.log({"event": "curriculum", "phase": self.curriculum.phase,
+                          "stage": self.curriculum.stage, "order": self.curriculum.order,
+                          "reason": "score_plateau"})
             if not warm and not current:
                 self.refresh_calibration()
             self.flush_diagnostics()
-            if self.step and self.step % checkpoint_every == 0:
+            if self.step and self.step % checkpoint_every == 0 and self.step != last_saved_step:
                 self.save(self.output / "checkpoint")
+                last_saved_step = self.step
+        self.consume_records(force=True)
         self.save(self.output / "checkpoint")
         return self.buffer.statistics()
+
+    def consume_records(self, force=False):
+        for name in ("warm", "joint"):
+            records = self.pending_records[name]
+            if records and (len(records) >= len(self.streams) or force):
+                self.curriculum.observe(records)
+                self.update(records, warmup=name == "warm")
+                self.pending_records[name] = []
 
     def log(self, values):
         with (self.output / "training.jsonl").open("a", encoding="utf-8") as handle:
@@ -324,6 +351,8 @@ class Trainer:
                  "head_updates": self.head_updates, "serial": self.serial, "buffer": self.buffer,
                  "streams": self.streams, "fitting": self.fitting, "calibration": self.calibration,
                  "calibrator": self.calibrator.state_dict(), "rng": rng_state(),
+                 "curriculum": self.curriculum.state_dict(),
+                 "pending_records": self.pending_records,
                  "run_identity": self.run_identity, "log_positions": {}}
         for name in ("training.jsonl", "diagnostics.jsonl"):
             target = self.output / name
@@ -332,7 +361,9 @@ class Trainer:
                 body = target.read_bytes()
                 state["log_positions"][name] = (len(body), hashlib.sha256(body).hexdigest())
         evaluation = {"calibrator": self.calibrator.state_dict(),
-                      "stores": {stream.benchmark: stream.store.state_dict() for stream in reversed(self.streams)}}
+                      "stores": {stream.benchmark: stream.store.state_dict() for stream in reversed(self.streams)},
+                      "source_stores": [{"stream": stream.stream_id, "benchmark": stream.benchmark,
+                                         "store": stream.store.state_dict()} for stream in self.streams]}
         save_bundle(self.models, path, state, evaluation)
 
     def restore(self, path):
@@ -340,6 +371,8 @@ class Trainer:
         state = torch.load(path / "training.pt", map_location="cpu", weights_only=False)
         if "rng" not in state:
             raise ValueError("Training resume requires a checkpoint with RNG state")
+        if self.config.curriculum and "curriculum" not in state:
+            raise ValueError("Training resume requires the saved curriculum state")
         self.models.restore(path)
         random_state = state.pop("rng")
         for name, (offset, checksum) in state.pop("log_positions", {}).items():
@@ -352,6 +385,8 @@ class Trainer:
                     handle.truncate(offset)
         self.optimizer.load_state_dict(state.pop("optimizer"))
         self.calibrator.load_state_dict(state.pop("calibrator"))
+        if "curriculum" in state:
+            self.curriculum.load_state_dict(state.pop("curriculum"))
         for name, value in state.items():
             setattr(self, name, value)
         restore_rng(random_state)

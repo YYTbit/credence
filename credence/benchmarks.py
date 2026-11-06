@@ -175,10 +175,18 @@ class ToolBenchBackend:
         parameters = task["parameters"]
         self.env = rapidapi_wrapper(parameters["query_json"], parameters.get("tool_descriptions", []),
                                    None, SimpleNamespace(**settings), process_id=seed)
-        from evaluators import load_registered_automatic_evaluator
-        self.evaluator = load_registered_automatic_evaluator(
-            evaluator_name=options.get("evaluator", "tooleval_gpt-3.5-turbo_default"),
-            evaluators_cfg_path=str(Path(options["sdk_path"]) / "toolbench" / "tooleval" / "evaluators"))
+        self.reference = None
+        if task.get("split") == "train":
+            from .rewards import reference_calls
+            self.reference = reference_calls(parameters)
+            available = {function["name"] for function in self.env.functions}
+            if any(name not in available for name, _ in self.reference):
+                raise ValueError("Reference-path functions require the released task's tool descriptions")
+        else:
+            from evaluators import load_registered_automatic_evaluator
+            self.evaluator = load_registered_automatic_evaluator(
+                evaluator_name=options.get("evaluator", "tooleval_gpt-3.5-turbo_default"),
+                evaluators_cfg_path=str(Path(options["sdk_path"]) / "toolbench" / "tooleval" / "evaluators"))
         self.repeats = options.get("evaluate_times", 4)
         if not isinstance(self.repeats, int) or self.repeats < 1:
             raise ValueError("ToolEval repetitions require a positive integer")
@@ -194,13 +202,22 @@ class ToolBenchBackend:
         payload = json.dumps(arguments.get("parameters", {}))
         observation, status = self.env.step(action_name=api_name, action_input=payload)
         self.steps.append({"role": "tool", "name": api_name, "input": payload,
+                           "status": status,
                            "message": str({"name": api_name, "arguments": payload}),
                            "content": str(observation), "next": []})
         return {"observation": observation, "status": status}
 
     def grade(self, answer):
+        if self.reference is not None:
+            from .rewards import path_completion
+            return path_completion(self.steps, self.reference)
         from evaluators.registered_cls.rtl import AnswerStatus, AnswerPass
-        if not answer or not any(step["name"] == "Finish" for step in self.steps):
+        finishes = [json.loads(step["input"]) for step in self.steps
+                    if step["name"] == "Finish" and step["status"] == 3]
+        if not finishes:
+            return 0.0
+        answer = finishes[-1].get("final_answer", "")
+        if not isinstance(answer, str) or not answer.strip():
             return 0.0
         available = [{"name": row["name"], "description": row.get("description", "")} for row in self.env.functions]
         details = []

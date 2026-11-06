@@ -37,10 +37,12 @@ The supplied [manifest](../configs/environments.json) selects the five native wr
 | ScienceWorld | `task_name`, `variation`, optional `simplification` | `benchmark.step(action)` |
 | WebShop | released `goal_id` | `benchmark.step(action)` |
 | API-Bank | `apis`, released `ground_truth` API records | `benchmark.call(name, **parameters)` |
-| ToolBench | released `query_json`, `tool_descriptions` | `benchmark.call(name, **parameters)` |
+| ToolBench | released `query_json`, `tool_descriptions`; training `reference_path` or `reference_messages` | `benchmark.call(name, **parameters)` |
 | AppWorld | released `task_id` | `benchmark.execute(code)` |
 
 Native wrappers retain environment state in separate processes and expose `benchmark.py` within each workspace. Official graders provide normalized scores. Custom factories can implement `start(task, workspace, seed)` with session methods `step(action)`, `grade(answer)`, `close()`, and `initial_observation`.
+
+ToolBench training scores completed calls along the released reference path. Each `reference_path` entry contains `name` and `arguments`. Native OpenAI tool-call messages and ToolBench `conversations` can be supplied as `reference_messages` and `conversations`, respectively. Successful calls advance the reference sequence, and its completed fraction supplies the training reward. Evaluation uses ToolEval pass rate.
 
 `credence.environments:CommandEnvironment` accepts `command` and `timeout` keyword arguments. Its process reads JSON requests from stdin and writes one JSON response per line to stdout.
 
@@ -85,6 +87,8 @@ python -m credence train --config configs/${MODEL}.yaml \
 
 Checkpoints contain the native adapters, tokenizer, generation configuration, projection and outcome model. Training state includes optimizer moments, RNG state, stream positions, version ledgers, pending candidate groups, calibration records, and policy-update counts. Resume retains the original task and environment inputs. Every fifth stream position supplies calibration data and is excluded from policy and predictor updates.
 
+After predictor warm-up, training orders benchmark stages by observed training reward density. The running-score monitor advances a stage at a plateau or when its stream schedule completes. Joint continuation consumes the remaining scheduled episodes. Stage state and the native early-stopping counter are included in checkpoints.
+
 ## Evaluation
 
 ```bash
@@ -95,3 +99,5 @@ python -m credence run --config configs/${MODEL}.yaml \
 ```
 
 Evaluation isolates task stores and commits episode records incrementally. Repeat the command to resume the same evaluation. The completed collection produces `episode_summary.json` from the recorded scores, including scored-task and unavailable-task counts. Model access and ToolEval credentials are supplied through the environment.
+
+AppWorld transfer retrieves a source store from the trained streams using the learned coverage scorer. Each evaluation task receives a separate copy of that store.

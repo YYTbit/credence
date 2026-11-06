@@ -26,6 +26,9 @@ def load_tasks(path):
                 raise ValueError("Tasks require a nonempty task identifier")
             if task.get("split") not in ("train", "test", "test_normal"):
                 raise ValueError("Tasks require an explicit released split")
+            if task["benchmark"] == "toolbench" and task["split"] == "train":
+                from .rewards import reference_calls
+                reference_calls(task.get("parameters", {}))
             key = (task["benchmark"], task["split"], task["task_id"])
             if key in seen:
                 raise ValueError("Duplicate task identifier within a split")

@@ -24,4 +24,8 @@ reuse_margin: 0.25
 warmup_episodes: 100
 token_budget: 28000
 credit_query_tokens: 64
+curriculum: true
+curriculum_window: 21
+curriculum_patience: 1
+curriculum_threshold: 0.0
 seed: 149

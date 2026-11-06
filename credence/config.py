@@ -36,6 +36,10 @@ class Config:
     calibration_stride: int = 5
     reuse_margin: float = 0.25
     warmup_episodes: int = 100
+    curriculum: bool = True
+    curriculum_window: int = 21
+    curriculum_patience: int = 1
+    curriculum_threshold: float = 0.0
     token_budget: int = 28000
     credit_query_tokens: int = 64
     max_steps: int = 50
@@ -65,6 +69,7 @@ class Config:
                     "token_budget", "credit_query_tokens", "max_steps", "max_subtasks", "encoder_tokens",
                     "encoder_batch", "card_tokens", "policy_tokens", "planner_tokens", "actor_tokens",
                     "learning_rate_offset")
+        positive += ("curriculum_window", "curriculum_patience")
         if any(type(getattr(self, name)) is not int or getattr(self, name) < 1 for name in positive):
             raise ValueError("Counts and dimensions require positive values")
         if any(type(getattr(self, name)) is not int for name in ("group_size", "max_policy_lag", "warmup_episodes")):
@@ -84,7 +89,7 @@ class Config:
         if len(self.order_seeds) != 4 or len(self.store_seeds) != 8:
             raise ValueError("Stream construction requires four order seeds and eight store seeds")
         for name in ("token_cost", "encoder_weight", "predictor_weight",
-                     "contrastive_weight", "kl_weight", "reuse_margin"):
+                     "contrastive_weight", "kl_weight", "reuse_margin", "curriculum_threshold"):
             if getattr(self, name) < 0:
                 raise ValueError("Loss weights and costs require nonnegative values")
 

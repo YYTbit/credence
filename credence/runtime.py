@@ -103,7 +103,7 @@ class Runtime:
         indices, _ = greedy_select(tasks, embeddings, self.config.context_budget)
         return [assets[i].asset_id for i in indices]
 
-    def complete(self, head, prompt, limit, budget, seed, schema=None, sample=True):
+    def complete(self, head, prompt, limit, budget, seed, schema=None, sample=None):
         prompt_tokens = len(self.models.prompt_ids(prompt))
         budget.reserve(prompt_tokens + limit)
         result = self.models.generate(head, prompt, limit, seed, schema, sample)
@@ -124,8 +124,9 @@ class Runtime:
         subtasks = [task["text"]]
         try:
             plan = self.complete("agent", prompts.PLANNER.format(task=task["text"]),
-                                 self.config.planner_tokens, budget, seed, sample=False)
-            subtasks = [line.strip() for line in plan.text.splitlines() if line.strip()][:self.config.max_subtasks]
+                                 self.config.planner_tokens, budget, seed)
+            subtasks = ([line.strip() for line in plan.text.splitlines() if line.strip()][:self.config.max_subtasks]
+                        if getattr(plan, "reasoning_complete", True) else [])
             if not subtasks:
                 subtasks = [task["text"]]
             task_embeddings, asset_embeddings, assets = self.embeddings(start, subtasks)
@@ -148,7 +149,10 @@ class Runtime:
                 prompt = prompts.ACTOR.format(task=task["text"], subtasks="\n".join(subtasks),
                                               subtask=current, context=context, prev=previous)
                 output = self.complete("agent", prompt, self.config.actor_tokens, budget,
-                                       seed + step + 1, SCHEMAS["actor"], sample=False)
+                                       seed + step + 1, SCHEMAS["actor"])
+                if not getattr(output, "reasoning_complete", True):
+                    previous += "\nA completed final-response channel is required for the action."
+                    continue
                 try:
                     action = json.loads(output.text)
                     if action.get("action") not in ("shell", "py", "final") or not isinstance(action.get("content"), str):
@@ -260,6 +264,8 @@ class Runtime:
         return prompts.CURATOR.format(card=self.models.truncate(json.dumps(card), self.config.card_tokens))
 
     def apply(self, head, sample, episode, store, asset_id=None):
+        if not getattr(sample, "reasoning_complete", True):
+            raise ValueError("Asset operations require a completed final-response channel")
         proposal = json.loads(sample.text)
         if not isinstance(proposal, dict):
             raise ValueError("Policy output requires a JSON object")

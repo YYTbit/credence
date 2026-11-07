@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from .config import Config
+from .decoding import DECODING_PROTOCOL
 
 
 def digest(value):
@@ -68,6 +69,10 @@ def compatible_checkpoint(config, path, resume=False):
             previous.pop(name)
         if current != previous:
             raise ValueError("Training resume requires the saved training configuration")
+        if (path / "training.pt").is_file():
+            header = path / "complete.json"
+            if not header.is_file() or json.loads(header.read_text()).get("decoding_protocol") != DECODING_PROTOCOL:
+                raise ValueError("Training resume requires the matching decoding protocol")
     if config.revision is None:
         config.revision = saved.revision
     return path
@@ -89,7 +94,8 @@ def save_bundle(models, output, training_state=None, evaluation_state=None):
     write_json(staging / "complete.json", {"generation": name, "stage": state.get("stage", "joint"),
                                            "run_identity": state.get("run_identity"),
                                            "sft_identity": state.get("identity"),
-                                           "training_complete": state.get("complete")})
+                                           "training_complete": state.get("complete"),
+                                           "decoding_protocol": DECODING_PROTOCOL})
     os.replace(staging, generations / name)
     previous = resolve_checkpoint(root)
     write_json(root / "checkpoint.json", {"generation": name})

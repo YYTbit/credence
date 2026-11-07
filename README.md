@@ -22,17 +22,38 @@ on acted decisions.
 
 ## Algorithm Flow
 
-To learn asset creation and maintenance together, CREDENCE jointly trains three
-policies. A memory writer distills experience into reusable instructions, a tool
-builder creates executable functions, and a curator keeps, merges, splits, or
-removes assets. Their decisions shape the store used by subsequent tasks. We
-first formalize this interaction, then describe the framework and removal-based
-credit, and finally explain how delayed feedback supports joint optimization.
-Figure 1 gives an overview.
-
 ![Comparison of store evolution strategies](assets/overview.png)
 
 **Figure 1.** Comparison of store evolution strategies. (a) Reuse and local test signals for retention. (b) Memory decisions trained from episode returns while tool evolution follows its own signal. (c) CREDENCE, which co-trains the memory writer, tool builder, and curator with counterfactual credit computed from the observed score and the predicted score under asset removal.
+
+To learn asset creation and maintenance together, CREDENCE jointly trains three
+policies. A memory writer distills experience into reusable instructions, a tool
+builder creates executable functions, and a curator keeps, merges, splits, or
+removes assets. Their decisions shape the store used by subsequent tasks.
+
+1. **Context assembly.** To retrieve complementary assets,
+   encoder $`f_\theta`$ maps task subtasks and assets to normalized embeddings.
+   Greedy selection adds the largest coverage gain until $`K`$ assets are
+   selected or gains vanish.
+
+2. **Counterfactual credit and calibrated curation.** To provide this delayed
+   supervision, CREDENCE estimates counterfactual credit as the observed task
+   score minus the predicted score after asset removal. Accumulated credit
+   rewards the writer and builder, while a calibrated margin determines when
+   evidence supports curation.
+
+3. **Asset creators and curator.** We validate memory formats and sandbox-test
+   tool compilation and execution. Validated candidates receive version-specific
+   creator records, which associate later reuse with the originating decision.
+   To revisit removals as tasks change, a buffer retains removed versions for
+   $`J=10`$ episodes. Positive estimated reinsertion gain supports restoration.
+
+4. **Delayed credit and joint optimization.** To preserve candidate comparisons
+   as rewards arrive across batches, we cache each $`G=8`$ candidate group with
+   its prompt, outputs, versions, and behavior-policy log probabilities. Each
+   batch combines matured policy groups with current episode records. Thus,
+   delayed asset utility trains the creators while curation, retrieval, and
+   prediction adapt to the same evolving stores.
 
 ![Algorithm 1](assets/algorithm.png)
 

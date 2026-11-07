@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 import math
 from pathlib import Path
 
@@ -51,6 +51,9 @@ class Config:
     policy_tokens: int = 512
     planner_tokens: int = 256
     actor_tokens: int = 1024
+    generation: dict = field(default_factory=dict)
+    chat_template_kwargs: dict = field(default_factory=dict)
+    policy_temperature: float = 1.0
     seed: int = 149
     order_seeds: tuple = (41, 42, 43, 44)
     store_seeds: tuple = (141, 142, 143, 144, 145, 146, 147, 148)
@@ -60,6 +63,36 @@ class Config:
 
     def __post_init__(self):
         self.order_seeds, self.store_seeds = tuple(self.order_seeds), tuple(self.store_seeds)
+        if not isinstance(self.generation, dict) or not isinstance(self.chat_template_kwargs, dict):
+            raise ValueError("Generation and chat-template settings require mappings")
+        allowed = {"do_sample", "temperature", "top_p", "top_k", "min_p", "typical_p",
+                   "epsilon_cutoff", "eta_cutoff", "repetition_penalty", "no_repeat_ngram_size"}
+        if set(self.generation) - allowed:
+            raise ValueError("Generation overrides require supported native sampling settings")
+        for name, value in self.generation.items():
+            if name == "do_sample":
+                if type(value) is not bool:
+                    raise ValueError("do_sample requires a boolean")
+                continue
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"Generation setting {name} requires a finite number")
+            if name in ("top_k", "no_repeat_ngram_size"):
+                valid = type(value) is int and value >= 0
+            elif name in ("temperature", "repetition_penalty"):
+                valid = value > 0
+            elif name in ("epsilon_cutoff", "eta_cutoff"):
+                valid = 0 <= value < 1
+            elif name == "min_p":
+                valid = 0 <= value <= 1
+            else:
+                valid = 0 < value <= 1
+            if not valid:
+                raise ValueError(f"Generation setting {name} is outside its native range")
+        reserved = {"tokenize", "add_generation_prompt", "return_tensors", "return_dict"}
+        if reserved & set(self.chat_template_kwargs):
+            raise ValueError("Chat-template overrides cannot replace the tokenization interface")
+        if "enable_thinking" in self.chat_template_kwargs and type(self.chat_template_kwargs["enable_thinking"]) is not bool:
+            raise ValueError("enable_thinking requires a boolean")
         for item in fields(self):
             value = getattr(self, item.name)
             if isinstance(value, (int, float)) and not math.isfinite(value):
@@ -81,7 +114,7 @@ class Config:
             raise ValueError("Calibration quantile lies outside (0, 1)")
         if not 0 < self.clip_ratio < 1 or self.advantage_epsilon <= 0:
             raise ValueError("Invalid policy objective setting")
-        if self.contrastive_temperature <= 0 or self.learning_rate_scale <= 0:
+        if self.contrastive_temperature <= 0 or self.policy_temperature <= 0 or self.learning_rate_scale <= 0:
             raise ValueError("Temperature and learning-rate scale require positive values")
         if self.gradient_norm <= 0 or self.dtype not in ("float32", "float16", "bfloat16"):
             raise ValueError("Invalid gradient norm or model dtype")

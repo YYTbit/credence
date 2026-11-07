@@ -411,7 +411,7 @@ def supervised_warm_start(models, records, output, epochs=1, learning_rate=5e-5,
         if not isinstance(parsed, dict) or set(parsed) != set(schema["required"]):
             raise ValueError("Warm-start response differs from its head schema")
         from .groups import Sample
-        ids = models.tokenizer.encode(response, add_special_tokens=False) + [models.tokenizer.eos_token_id]
+        ids = models.response_ids(row["prompt"], response)
         samples.append((row["head"], Sample(row["prompt"], models.prompt_ids(row["prompt"]), ids, response, torch.zeros(len(ids)))))
     if not samples or set(head for head, _ in samples) != set(models.heads):
         raise ValueError("Warm-start input requires examples for all three heads")

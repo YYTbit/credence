@@ -5,6 +5,7 @@ import torch
 
 from .checkpoint import file_digest, resolve_checkpoint
 from .credit import Calibrator
+from .decoding import DECODING_PROTOCOL
 from .environments import BENCHMARKS
 from .records import Collection
 from .runtime import EpisodeUnavailable, Runtime
@@ -53,7 +54,8 @@ def evaluate(models, environments, config, tasks, checkpoint, output, seed=149,
         plan.extend((index, position, task) for position, task in enumerate(selected))
     if not plan:
         raise ValueError("Evaluation requires tasks from an evaluation split")
-    identity = {"stage": "evaluation", "tasks": plan, "seed": seed, "config": vars(config),
+    identity = {"stage": "evaluation", "decoding_protocol": DECODING_PROTOCOL,
+                "tasks": plan, "seed": seed, "config": vars(config),
                 "checkpoint": file_digest(root / "complete.json") if (root / "complete.json").is_file()
                 else file_digest(root / "auxiliary.pt"), "inputs": input_identity or {}}
     output = Path(output)

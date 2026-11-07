@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from .credit import Calibrator
+from .decoding import DECODING_PROTOCOL
 from .checkpoint import file_digest, write_json
 from .records import Collection
 from .runtime import EpisodeUnavailable, Runtime, TokenBudget, policy_schema
@@ -76,7 +77,8 @@ def collect_warm_start(models, environments, config, tasks, output, count=1000, 
     output = Path(output)
     runtime = runtime_factory(models, Calibrator(config.calibration_quantile, config.reuse_margin), config)
     model_config = getattr(models.model, "config", None)
-    identity = {"stage": "warm-start", "plan": plan, "seed": seed, "config": vars(config),
+    identity = {"stage": "warm-start", "decoding_protocol": DECODING_PROTOCOL,
+                "plan": plan, "seed": seed, "config": vars(config),
                 "base_revision": getattr(model_config, "_commit_hash", None), "inputs": input_hashes or {}}
     with Collection(output, identity, ("trajectories.jsonl", "head_examples.jsonl")) as collection:
         return _collect(models, environments, config, plan, seed, runtime, output,
@@ -149,7 +151,9 @@ def _collect(models, environments, config, plan, seed, runtime, output, collecti
         "base_policy": {"backbone": config.backbone,
                         "resolved_revision": getattr(model_config, "_commit_hash", None),
                         "adapters_disabled": True,
-                        "rollout_decoding": "greedy"},
+                        "rollout_decoding": "native_generation_config",
+                        "generation_overrides": config.generation,
+                        "chat_template_kwargs": config.chat_template_kwargs},
         "seed": seed,
         "input_sha256": input_hashes or {},
         "files": {

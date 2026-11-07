@@ -12,6 +12,10 @@ class Sample:
     behavior_logprobs: torch.Tensor
     schema: dict | None = None
     seed: int | None = None
+    generation: dict | None = None
+    reasoning_complete: bool = True
+    finish_reason: str = "stop"
+    reasoning_prefix_open: bool | None = None
 
 
 @dataclass

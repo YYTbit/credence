@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .decoding import GenerationPolicy, StructuredOutput, final_answer, reasoning_prefix
+
 
 class Projection(nn.Module):
     def __init__(self, hidden, dimension):
@@ -31,6 +33,7 @@ class LanguageModels:
     def __init__(self, model, tokenizer, config):
         self.model, self.tokenizer, self.config = model, tokenizer, config
         self.embedding_cache = OrderedDict()
+        self._grammar_tokens = None
         self.device = next(model.parameters()).device
         self.projection = Projection(model.config.hidden_size, config.embedding_dim).to(self.device)
         self.outcome = OutcomeModel(config.summary_dim, config.predictor_hidden).to(self.device)
@@ -98,11 +101,19 @@ class LanguageModels:
         if self.tokenizer.chat_template:
             return self.tokenizer.apply_chat_template([{"role": "user", "content": prompt}],
                                                      tokenize=True, add_generation_prompt=True,
-                                                     enable_thinking=False)
+                                                     **self.config.chat_template_kwargs)
         return self.tokenizer.encode(prompt, add_special_tokens=True)
 
     def token_count(self, text):
         return len(self.tokenizer.encode(text, add_special_tokens=False))
+
+    def response_ids(self, prompt, response):
+        if reasoning_prefix(self.tokenizer, prompt, self.config.chat_template_kwargs):
+            if response.startswith("<think>"):
+                response = response[len("<think>"):]
+            elif not response.startswith("</think>"):
+                response = "</think>\n\n" + response
+        return self.tokenizer.encode(response, add_special_tokens=False) + [self.tokenizer.eos_token_id]
 
     def truncate(self, text, limit):
         return self.tokenizer.decode(self.tokenizer.encode(text, add_special_tokens=False)[:limit],
@@ -141,31 +152,31 @@ class LanguageModels:
                 values.append(self.projection(pooled))
             return torch.cat(values)
 
-    def _grammar(self, schema):
+    def _grammar(self, schema, prompt="", prefix_open=None):
         if schema is None or not self.config.grammar_mask:
             return None
-        from lmformatenforcer import JsonSchemaParser
-        from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
-        return build_transformers_prefix_allowed_tokens_fn(self.tokenizer, JsonSchemaParser(schema))
+        from lmformatenforcer.integrations.transformers import build_token_enforcer_tokenizer_data
+        if self._grammar_tokens is None:
+            self._grammar_tokens = build_token_enforcer_tokenizer_data(self.tokenizer)
+        opened = (reasoning_prefix(self.tokenizer, prompt, self.config.chat_template_kwargs)
+                  if prefix_open is None else prefix_open)
+        return StructuredOutput(self.tokenizer, self._grammar_tokens, schema, opened)
 
-    def _masked_logits(self, logits, prefix, grammar):
-        if grammar is None:
-            return logits.float()
-        allowed = grammar(0, prefix)
-        mask = torch.full_like(logits, -torch.inf, dtype=torch.float32)
-        mask[allowed] = logits[allowed].float()
-        return mask
-
-    def generate(self, head, prompt, max_tokens, seed=0, schema=None, sample=True):
-        from transformers.generation.stopping_criteria import EosTokenCriteria
+    def generate(self, head, prompt, max_tokens, seed=0, schema=None, sample=None):
         from .groups import Sample
+        if max_tokens < 1:
+            raise ValueError("Generation requires a positive response budget")
         ids = self.prompt_ids(prompt)
+        if not ids:
+            raise ValueError("Generation requires a nonempty prompt")
         generator = torch.Generator(device=self.device).manual_seed(seed)
-        grammar = self._grammar(schema)
-        eos = getattr(self.model.generation_config, "eos_token_id", None)
-        stopping = EosTokenCriteria(self.tokenizer.eos_token_id if eos is None else eos)
+        opened = reasoning_prefix(self.tokenizer, prompt, self.config.chat_template_kwargs)
+        grammar = self._grammar(schema, prompt, opened)
+        policy = GenerationPolicy(self.model.get_base_model(), self.tokenizer, self.config, head,
+                                  len(ids), max_tokens, grammar, self.device, sample)
         self.model.eval()
         output, probabilities = [], []
+        finish_reason = "length"
         context = self.model.disable_adapter() if head == "agent" else nullcontext()
         if head != "agent":
             self.select(head)
@@ -173,34 +184,44 @@ class LanguageModels:
             inputs = torch.tensor([ids], device=self.device)
             # Reuse the KV cache and feed only the newest token after the prompt pass.
             cache = None
-            for _ in range(max_tokens):
-                result = self.model(input_ids=inputs, past_key_values=cache, use_cache=True)
-                prefix = torch.tensor(ids + output, device=self.device)
-                logits = self._masked_logits(result.logits[0, -1], prefix, grammar)
-                logprobs = logits.log_softmax(dim=-1)
-                token = int(torch.multinomial(logprobs.exp(), 1, generator=generator)) if sample else int(logprobs.argmax())
+            for step in range(max_tokens):
+                result = self.model(input_ids=inputs, past_key_values=cache, use_cache=policy.settings.use_cache)
+                history = torch.tensor([ids + output], device=self.device)
+                logits = policy.scores(history, result.logits[0, -1])
+                token, probability = policy.draw(logits, generator)
                 output.append(token)
-                probabilities.append(logprobs[token].cpu())
+                probabilities.append(probability.cpu())
                 cache = result.past_key_values
-                inputs = torch.tensor([[token]], device=self.device)
-                if stopping(inputs, None).item():
+                inputs = torch.tensor([[token]] if cache is not None else [ids + output], device=self.device)
+                if policy.stopping(torch.tensor([ids + output], device=self.device), None).item():
+                    finish_reason = "length" if step == max_tokens - 1 and token not in policy.eos else "stop"
                     break
-        text = self.tokenizer.decode(output, skip_special_tokens=True)
-        return Sample(prompt, ids, output, text, torch.stack(probabilities), schema, seed)
+        text, complete = final_answer(self.tokenizer, output, opened, policy.eos)
+        return Sample(prompt, ids, output, text, torch.stack(probabilities), schema, seed,
+                      policy.state, complete, finish_reason, opened)
 
     def logprobs(self, head, sample, grad=True):
         self.select(head)
         self.model.train(grad)
         ids = torch.tensor([sample.prompt_ids + sample.output_ids], device=self.device)
-        grammar = self._grammar(sample.schema)
+        grammar = self._grammar(sample.schema, sample.prompt, getattr(sample, "reasoning_prefix_open", None))
+        recorded = getattr(sample, "generation", None)
+        policy = (GenerationPolicy(self.model.get_base_model(), self.tokenizer, self.config, head,
+                                   len(sample.prompt_ids), recorded["max_new_tokens"], grammar,
+                                   self.device, recorded=recorded) if recorded is not None else None)
         with nullcontext() if grad else torch.no_grad():
             result = self.model(input_ids=ids, use_cache=False)
             start = len(sample.prompt_ids) - 1
             # Apply the generation-time grammar at each prefix when scoring output tokens.
             values = []
             for i, token in enumerate(sample.output_ids):
-                prefix = ids[0, :len(sample.prompt_ids) + i]
-                logits = self._masked_logits(result.logits[0, start + i], prefix, grammar)
+                prefix = ids[:, :len(sample.prompt_ids) + i]
+                logits = result.logits[0, start + i].float()
+                if policy is not None:
+                    logits = policy.scores(prefix, logits)
+                elif grammar is not None:
+                    from .decoding import SchemaLogitsProcessor
+                    logits = SchemaLogitsProcessor(grammar)(prefix, logits.unsqueeze(0))[0]
                 values.append(logits.log_softmax(dim=-1)[token])
             return torch.stack(values)
 
@@ -228,6 +249,7 @@ class LanguageModels:
         self.outcome.load_state_dict(state["outcome"])
         self.tokenizer = AutoTokenizer.from_pretrained(path / "tokenizer")
         self.tokenizer.padding_side = "right"
+        self._grammar_tokens = None
         if (path / "generation_config.json").is_file():
             self.model.generation_config = GenerationConfig.from_pretrained(path)
         self.invalidate_embeddings()

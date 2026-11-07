@@ -12,6 +12,9 @@ Install the released environments for API-Bank, WebShop, ScienceWorld, ToolBench
 
 Install each SDK and its released data using its own instructions. Separate SDK interpreters can be selected with `sdk_python` in `configs/environments.json`; install this package in those interpreters as well. The model environment uses the versions in `pyproject.toml`.
 
+Task-agent generation follows the backbone's native generation configuration and chat template.
+Model profiles accept `generation` and `chat_template_kwargs` overrides.
+
 ## Task records
 
 Provide one JSON object per line in `data/tasks.jsonl`.

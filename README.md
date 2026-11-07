@@ -31,6 +31,8 @@ policies. A memory writer distills experience into reusable instructions, a tool
 builder creates executable functions, and a curator keeps, merges, splits, or
 removes assets. Their decisions shape the store used by subsequent tasks.
 
+The algorithm flow includes:
+
 1. **Context assembly.** To retrieve complementary assets,
    encoder $`f_\theta`$ maps task subtasks and assets to normalized embeddings.
    Greedy selection adds the largest coverage gain until $`K`$ assets are
@@ -54,6 +56,8 @@ removes assets. Their decisions shape the store used by subsequent tasks.
    batch combines matured policy groups with current episode records. Thus,
    delayed asset utility trains the creators while curation, retrieval, and
    prediction adapt to the same evolving stores.
+
+The CREDENCE pseudocode is as follows:
 
 ![Algorithm 1](assets/algorithm.png)
 
